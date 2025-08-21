@@ -1,1 +1,271 @@
+-- phpMyAdmin SQL Dump
+-- version 5.2.1
+-- https://www.phpmyadmin.net/
+--
+-- Servidor: 127.0.0.1
+-- Tiempo de generación: 20-08-2025 a las 21:24:27
+-- Versión del servidor: 10.4.28-MariaDB
+-- Versión de PHP: 8.2.4
+
+SET SQL_MODE = "NO_AUTO_VALUE_ON_ZERO";
+START TRANSACTION;
+SET time_zone = "+00:00";
+
+
+/*!40101 SET @OLD_CHARACTER_SET_CLIENT=@@CHARACTER_SET_CLIENT */;
+/*!40101 SET @OLD_CHARACTER_SET_RESULTS=@@CHARACTER_SET_RESULTS */;
+/*!40101 SET @OLD_COLLATION_CONNECTION=@@COLLATION_CONNECTION */;
+/*!40101 SET NAMES utf8mb4 */;
+
+--
+-- Base de datos: `ausentismo`
+--
+
+-- --------------------------------------------------------
+
+--
+-- Estructura de tabla para la tabla `dependencias`
+--
+
+CREATE TABLE `dependencias` (
+  `id` int(11) NOT NULL,
+  `nombre` varchar(255) NOT NULL,
+  `dependencia_padre_id` int(11) DEFAULT NULL,
+  `secretario_usuario_id` int(11) DEFAULT NULL,
+  `jefe_usuario_id` int(11) DEFAULT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+
+--
+-- Volcado de datos para la tabla `dependencias`
+--
+
+INSERT INTO `dependencias` (`id`, `nombre`, `dependencia_padre_id`, `secretario_usuario_id`, `jefe_usuario_id`) VALUES
+(1, 'CONTROL INTERNO', NULL, NULL, NULL),
+(2, 'DESPACHO', NULL, NULL, NULL),
+(3, 'OFICINA ASESORA JURIDICA', NULL, NULL, NULL),
+(4, 'OFICINA ASESORA DE PLANEACION', NULL, NULL, NULL),
+(5, 'SECRETARIA DE GOBIERNO', NULL, NULL, NULL),
+(6, 'SECRETARIA DE HACIENDA', NULL, NULL, NULL),
+(7, 'SECRETARIA DE DESARROLLO ECONOMICO', NULL, NULL, NULL),
+(8, 'SECRETARIA DE SALUD Y GESTION SOSIAL', NULL, NULL, NULL),
+(9, 'SECRETARIA DE EDUCACION Y CULTURA', NULL, NULL, NULL),
+(10, 'SECRETARIA DE INFRAESTRUCTURA', NULL, NULL, NULL),
+(11, 'SECRETARIA GENERAL', NULL, 15, NULL),
+(12, 'Predial', 6, NULL, 19),
+(13, 'Archivo', 6, NULL, NULL),
+(14, 'Cobro Coactivo', 6, NULL, NULL),
+(15, 'ICA', 6, NULL, NULL),
+(16, 'IPU', 6, NULL, NULL),
+(17, 'Victimas', 5, NULL, NULL),
+(18, 'Comisaria', 5, NULL, NULL),
+(19, 'Comparendos', 5, NULL, NULL),
+(20, 'Desarrollo Comunitario', 5, NULL, NULL),
+(21, 'Inspección', 5, NULL, NULL),
+(22, 'Fondo de Seguridad', 5, NULL, NULL),
+(23, 'Tic', 11, NULL, 13),
+(24, 'Archivo', 11, NULL, NULL),
+(25, 'Talento Humano', 11, NULL, NULL),
+(26, 'Almacen', 11, NULL, NULL);
+
+-- --------------------------------------------------------
+
+--
+-- Estructura de tabla para la tabla `solicitudes`
+--
+
+CREATE TABLE `solicitudes` (
+  `id` int(11) NOT NULL,
+  `usuarioId` int(11) NOT NULL,
+  `fecha` datetime DEFAULT NULL,
+  `nombre_completo` varchar(255) DEFAULT NULL,
+  `cedula` varchar(255) DEFAULT NULL,
+  `cargo` varchar(255) DEFAULT NULL,
+  `dependencia_id` int(11) NOT NULL,
+  `estudios` tinyint(1) DEFAULT 0,
+  `cita_medica` tinyint(1) DEFAULT 0,
+  `licencia` tinyint(1) DEFAULT 0,
+  `compensatorio` tinyint(1) DEFAULT 0,
+  `otro` tinyint(1) DEFAULT 0,
+  `motivo` text DEFAULT NULL,
+  `fecha_horas` datetime DEFAULT NULL,
+  `numero_horas` int(11) DEFAULT NULL,
+  `hora_inicio` time DEFAULT NULL,
+  `hora_fin` time DEFAULT NULL,
+  `numero_dias` int(11) DEFAULT NULL,
+  `dia_inicio` datetime DEFAULT NULL,
+  `dia_fin` datetime DEFAULT NULL,
+  `reviso_si` tinyint(1) DEFAULT 0,
+  `reviso_no` tinyint(1) DEFAULT 0,
+  `ajusta_ley_si` tinyint(1) DEFAULT 0,
+  `ajusta_ley_no` tinyint(1) DEFAULT 0,
+  `firma_solicitante` varchar(255) DEFAULT NULL,
+  `firma_jefe_inmediato` varchar(255) DEFAULT NULL,
+  `nombre_jefe_inmediato` varchar(255) DEFAULT NULL,
+  `aprobado_jefe_por` int(11) DEFAULT NULL,
+  `aprobado_jefe_at` datetime DEFAULT NULL,
+  `obs_jefe` text DEFAULT NULL,
+  `firma_secretario` varchar(255) DEFAULT NULL,
+  `nombre_secretario` varchar(255) DEFAULT NULL,
+  `aprobado_secretario_por` int(11) DEFAULT NULL,
+  `aprobado_secretario_at` datetime DEFAULT NULL,
+  `obs_secretario` text DEFAULT NULL,
+  `estado` enum('pendiente_jefe','pendiente_secretario','aprobada','rechazada') DEFAULT 'pendiente_jefe',
+  `secretaria_oficina` varchar(255) DEFAULT NULL,
+  `area_trabajo` varchar(255) DEFAULT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+
+--
+-- Volcado de datos para la tabla `solicitudes`
+--
+
+INSERT INTO `solicitudes` (`id`, `usuarioId`, `fecha`, `nombre_completo`, `cedula`, `cargo`, `dependencia_id`, `estudios`, `cita_medica`, `licencia`, `compensatorio`, `otro`, `motivo`, `fecha_horas`, `numero_horas`, `hora_inicio`, `hora_fin`, `numero_dias`, `dia_inicio`, `dia_fin`, `reviso_si`, `reviso_no`, `ajusta_ley_si`, `ajusta_ley_no`, `firma_solicitante`, `firma_jefe_inmediato`, `nombre_jefe_inmediato`, `aprobado_jefe_por`, `aprobado_jefe_at`, `obs_jefe`, `firma_secretario`, `nombre_secretario`, `aprobado_secretario_por`, `aprobado_secretario_at`, `obs_secretario`, `estado`, `secretaria_oficina`, `area_trabajo`) VALUES
+(1, 4, '2025-08-19 21:30:22', 'Andrés Alvarez Gomez', '1029660570', 'Apoyo', 23, 0, 1, 0, 0, 0, 'Cita médica', NULL, 2, '08:00:00', '10:00:00', NULL, NULL, NULL, 0, 0, 0, 1, NULL, NULL, 'a', NULL, NULL, NULL, NULL, 'Secretaria General', NULL, NULL, NULL, 'aprobada', NULL, NULL),
+(2, 12, '2025-08-20 13:58:43', 'eeeeeeee', '1234567', 'Tec apoyo', 23, 1, 0, 0, 0, 0, NULL, NULL, NULL, '11:58:00', '02:58:00', 21, '2025-08-10 00:00:00', '2025-08-30 00:00:00', 0, 0, 0, 0, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 'pendiente_jefe', 'GENERAL', 'TALENTO HUMANO'),
+(3, 4, '2025-08-20 14:21:46', 'Omar Andrés Alvarez Gomez', '1029660570', 'Apoyo', 23, 0, 1, 0, 0, 0, 'Cita médica', NULL, 2, '08:00:00', '10:00:00', NULL, NULL, NULL, 0, 0, 0, 0, NULL, NULL, 'a', 13, '2025-08-20 14:22:41', NULL, NULL, NULL, NULL, NULL, NULL, 'pendiente_secretario', NULL, NULL),
+(4, 4, '2025-08-20 16:13:10', 'Andrés Alvarez Gomez', '1029660570', NULL, 23, 1, 0, 0, 0, 0, 'ppppp', NULL, 1, '03:13:00', '04:13:00', 12, '2025-08-18 00:00:00', '2025-08-29 00:00:00', 0, 0, 0, 0, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 'pendiente_jefe', 'GENERAL', 'TIC');
+
+-- --------------------------------------------------------
+
+--
+-- Estructura de tabla para la tabla `usuarios`
+--
+
+CREATE TABLE `usuarios` (
+  `id` int(11) NOT NULL,
+  `nombre` varchar(255) NOT NULL,
+  `usuario` varchar(100) NOT NULL,
+  `password` varchar(255) NOT NULL,
+  `cedula` varchar(20) NOT NULL,
+  `dependencia_id` int(11) DEFAULT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+
+--
+-- Volcado de datos para la tabla `usuarios`
+--
+
+INSERT INTO `usuarios` (`id`, `nombre`, `usuario`, `password`, `cedula`, `dependencia_id`) VALUES
+(4, 'Andrés Alvarez Gomez', 'andres.emp', '$2b$10$sGYs3107kMDRFey15aMGduRJ.A4umFk7CFuYoVf644Z5gKGIXUYxK', '1029660570', 23),
+(12, 'otroempleado', 'empleado', '$2b$10$BdLBbx.YJjYEyZTriQFg.ONgKQbK4ddomKqRE9ewG7axOxppdA/7y', '123', 23),
+(13, 'jefedetic', 'a', '$2b$10$1waQSnFXJPE.eowrhATEou8iQXYy4u6PZjn1tcHb3ZbZZVvPs3FfG', '00', 23),
+(15, 'Carmen Galván Tamayo', 'Secretaria General', '$2b$10$11ptFJ5SOAdg4TL6bqa3kux.QY1PfLfRWUNH/VEohyD7tnyf.cYlu', '000', 11),
+(18, 'Martha', 'jefe.archivo', '$2b$10$sBQHhMclt6QJVkzjoLrueOGKfOh2nHDSPTU9cfeOnBym2SBmJDSo2', '1', 24),
+(19, 'Patricia Jefe TIC', 'patricia.jefe', '$2b$10$o.O.0MgONtOFsSfhDIMRGO2EaQukYYsfzXbOVAnbEgQ64uOcUVEUa', '1004', 12),
+(21, 'carlos', 'archivo.jefe', '$2b$10$qOKO6c.231mWDLwsDI9Bmuz.v4Z7zJ98fRw1WunHmw0d9Gt9L4Vgu', '1001', 11);
+
+--
+-- Índices para tablas volcadas
+--
+
+--
+-- Indices de la tabla `dependencias`
+--
+ALTER TABLE `dependencias`
+  ADD PRIMARY KEY (`id`),
+  ADD KEY `fk_dependencias_secretario_user` (`secretario_usuario_id`),
+  ADD KEY `fk_dependencias_jefe_user` (`jefe_usuario_id`),
+  ADD KEY `dependencia_padre_id` (`dependencia_padre_id`);
+
+--
+-- Indices de la tabla `solicitudes`
+--
+ALTER TABLE `solicitudes`
+  ADD PRIMARY KEY (`id`),
+  ADD KEY `solicitudes_usuario_id` (`usuarioId`),
+  ADD KEY `solicitudes_dependencia_id` (`dependencia_id`),
+  ADD KEY `solicitudes_estado` (`estado`),
+  ADD KEY `fk_sol_aprob_jefe` (`aprobado_jefe_por`),
+  ADD KEY `fk_sol_aprob_secret` (`aprobado_secretario_por`);
+
+--
+-- Indices de la tabla `usuarios`
+--
+ALTER TABLE `usuarios`
+  ADD PRIMARY KEY (`id`),
+  ADD UNIQUE KEY `usuario` (`usuario`),
+  ADD UNIQUE KEY `cedula` (`cedula`),
+  ADD UNIQUE KEY `usuario_2` (`usuario`),
+  ADD UNIQUE KEY `cedula_2` (`cedula`),
+  ADD UNIQUE KEY `usuario_3` (`usuario`),
+  ADD UNIQUE KEY `cedula_3` (`cedula`),
+  ADD UNIQUE KEY `usuario_4` (`usuario`),
+  ADD UNIQUE KEY `cedula_4` (`cedula`),
+  ADD UNIQUE KEY `usuario_5` (`usuario`),
+  ADD UNIQUE KEY `cedula_5` (`cedula`),
+  ADD UNIQUE KEY `usuario_6` (`usuario`),
+  ADD UNIQUE KEY `cedula_6` (`cedula`),
+  ADD UNIQUE KEY `usuario_7` (`usuario`),
+  ADD UNIQUE KEY `cedula_7` (`cedula`),
+  ADD UNIQUE KEY `usuario_8` (`usuario`),
+  ADD UNIQUE KEY `cedula_8` (`cedula`),
+  ADD UNIQUE KEY `usuario_9` (`usuario`),
+  ADD UNIQUE KEY `cedula_9` (`cedula`),
+  ADD UNIQUE KEY `usuario_10` (`usuario`),
+  ADD UNIQUE KEY `cedula_10` (`cedula`),
+  ADD UNIQUE KEY `usuario_11` (`usuario`),
+  ADD UNIQUE KEY `cedula_11` (`cedula`),
+  ADD UNIQUE KEY `usuario_12` (`usuario`),
+  ADD UNIQUE KEY `cedula_12` (`cedula`),
+  ADD UNIQUE KEY `usuario_13` (`usuario`),
+  ADD UNIQUE KEY `cedula_13` (`cedula`),
+  ADD UNIQUE KEY `usuario_14` (`usuario`),
+  ADD UNIQUE KEY `cedula_14` (`cedula`),
+  ADD UNIQUE KEY `usuario_15` (`usuario`),
+  ADD UNIQUE KEY `cedula_15` (`cedula`),
+  ADD UNIQUE KEY `usuario_16` (`usuario`),
+  ADD UNIQUE KEY `cedula_16` (`cedula`),
+  ADD KEY `dependencia_id` (`dependencia_id`);
+
+--
+-- AUTO_INCREMENT de las tablas volcadas
+--
+
+--
+-- AUTO_INCREMENT de la tabla `dependencias`
+--
+ALTER TABLE `dependencias`
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=28;
+
+--
+-- AUTO_INCREMENT de la tabla `solicitudes`
+--
+ALTER TABLE `solicitudes`
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=5;
+
+--
+-- AUTO_INCREMENT de la tabla `usuarios`
+--
+ALTER TABLE `usuarios`
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=22;
+
+--
+-- Restricciones para tablas volcadas
+--
+
+--
+-- Filtros para la tabla `dependencias`
+--
+ALTER TABLE `dependencias`
+  ADD CONSTRAINT `dependencias_ibfk_1` FOREIGN KEY (`dependencia_padre_id`) REFERENCES `dependencias` (`id`) ON DELETE SET NULL ON UPDATE CASCADE,
+  ADD CONSTRAINT `fk_dependencias_jefe_user` FOREIGN KEY (`jefe_usuario_id`) REFERENCES `usuarios` (`id`) ON DELETE SET NULL ON UPDATE CASCADE,
+  ADD CONSTRAINT `fk_dependencias_secretario_user` FOREIGN KEY (`secretario_usuario_id`) REFERENCES `usuarios` (`id`) ON DELETE SET NULL ON UPDATE CASCADE;
+
+--
+-- Filtros para la tabla `solicitudes`
+--
+ALTER TABLE `solicitudes`
+  ADD CONSTRAINT `fk_sol_aprob_jefe` FOREIGN KEY (`aprobado_jefe_por`) REFERENCES `usuarios` (`id`) ON DELETE SET NULL ON UPDATE CASCADE,
+  ADD CONSTRAINT `fk_sol_aprob_secret` FOREIGN KEY (`aprobado_secretario_por`) REFERENCES `usuarios` (`id`) ON DELETE SET NULL ON UPDATE CASCADE,
+  ADD CONSTRAINT `solicitudes_ibfk_31` FOREIGN KEY (`usuarioId`) REFERENCES `usuarios` (`id`) ON DELETE NO ACTION ON UPDATE CASCADE,
+  ADD CONSTRAINT `solicitudes_ibfk_32` FOREIGN KEY (`dependencia_id`) REFERENCES `dependencias` (`id`) ON DELETE NO ACTION ON UPDATE CASCADE;
+
+--
+-- Filtros para la tabla `usuarios`
+--
+ALTER TABLE `usuarios`
+  ADD CONSTRAINT `usuarios_ibfk_1` FOREIGN KEY (`dependencia_id`) REFERENCES `dependencias` (`id`) ON DELETE SET NULL ON UPDATE CASCADE;
+COMMIT;
+
+/*!40101 SET CHARACTER_SET_CLIENT=@OLD_CHARACTER_SET_CLIENT */;
+/*!40101 SET CHARACTER_SET_RESULTS=@OLD_CHARACTER_SET_RESULTS */;
+/*!40101 SET COLLATION_CONNECTION=@OLD_COLLATION_CONNECTION */;
 
