@@ -1,51 +1,24 @@
 import { useEffect, useState } from "react";
-import axios from "axios";
 import { useNavigate } from "react-router-dom";
+import api from "../api";
 
-function MisSolicitudes() {
+export default function MisSolicitudes() {
   const [solicitudes, setSolicitudes] = useState([]);
   const [rol, setRol] = useState("");
   const navigate = useNavigate();
 
   useEffect(() => {
-    const fetchSolicitudes = async () => {
+    (async () => {
       try {
-        const token = localStorage.getItem("token");
-        const userRol = localStorage.getItem("rol");
+        const userRol = localStorage.getItem("rol") || "";
         setRol(userRol);
-
-        let url = "http://localhost:4000/api/solicitudes/mis-solicitudes";
-
-        if (userRol && userRol.startsWith("JEFE")) {
-          // Mapa de roles a áreas
-          const areaMap = {
-            JEFETIC: "TIC",
-            JEFEARCHIVO: "ARCHIVO",
-            JEFETALENTOHUMANO: "TALENTO_HUMANO",
-            JEFEOTRO: "OTRO",
-          };
-
-          // Buscamos el área correspondiente al rol
-          const area = Object.keys(areaMap).find((key) =>
-            userRol.startsWith(key)
-          );
-
-          if (area) {
-            url = `http://localhost:4000/api/solicitudes/mis-solicitudes?area=${areaMap[area]}`;
-          }
-        }
-
-        const { data } = await axios.get(url, {
-          headers: { Authorization: `Bearer ${token}` },
-        });
-
+        // El backend ya decide qué ver según jerarquía; no hace falta query extra
+        const { data } = await api.get("/solicitudes/mis-solicitudes");
         setSolicitudes(data);
       } catch (error) {
         console.error("Error cargando solicitudes:", error);
       }
-    };
-
-    fetchSolicitudes();
+    })();
   }, []);
 
   const getEstadoColor = (estado) => {
@@ -63,6 +36,17 @@ function MisSolicitudes() {
     }
   };
 
+  const irADetalle = (s) => {
+    const userRol = (rol || "").toUpperCase();
+    if (userRol.startsWith("JEFE")) {
+      navigate(`/solicitudes/${s.id}/aprobar-jefe`);
+    } else if (userRol === "SECRETARIO") {
+      navigate(`/solicitudes/${s.id}/aprobar-secretario`);
+    } else {
+      navigate(`/solicitudes/${s.id}`);
+    }
+  };
+
   return (
     <div className="p-6 bg-gray-50 min-h-screen">
       <h2 className="text-2xl font-bold mb-6 text-gray-800">
@@ -74,42 +58,35 @@ function MisSolicitudes() {
       ) : (
         <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
           {solicitudes.map((s) => {
-            // Construir título automático si no hay motivo
             const titulo =
-              s.motivo?.trim() ||
+              (s.motivo && s.motivo.trim()) ||
               [
                 s.estudios && "Estudios",
                 s.cita_medica && "Cita Médica",
                 s.licencia && "Licencia",
                 s.compensatorio && "Compensatorio",
                 s.otro && "Otro",
-              ]
-                .filter(Boolean)
-                .join(", ");
+              ].filter(Boolean).join(", ");
 
             return (
               <div
                 key={s.id}
                 className="bg-white shadow rounded-xl p-4 border hover:shadow-lg transition cursor-pointer"
-                onClick={() => navigate(`/solicitudes/${s.id}`)} // Redirige al detalle
+                onClick={() => irADetalle(s)}
               >
                 <div className="flex justify-between items-center mb-2">
-                  <h3 className="font-semibold text-lg text-gray-700">{titulo}</h3>
-                  <span
-                    className={`px-3 py-1 text-sm rounded-full border ${getEstadoColor(
-                      s.estado
-                    )}`}
-                  >
+                  <h3 className="font-semibold text-lg text-gray-700">{titulo || `Solicitud #${s.id}`}</h3>
+                  <span className={`px-3 py-1 text-sm rounded-full border ${getEstadoColor(s.estado)}`}>
                     {s.estado}
                   </span>
                 </div>
                 <p className="text-sm text-gray-500">
-                  Área: <span className="font-medium">{s.area_trabajo}</span>
+                  Área: <span className="font-medium">{s.area_trabajo || "—"}</span>
                 </p>
                 <p className="text-sm text-gray-500">
                   Fecha de creación:{" "}
                   <span className="font-medium">
-                    {new Date(s.fecha).toLocaleDateString()}
+                    {s.fecha ? new Date(s.fecha).toLocaleDateString() : "—"}
                   </span>
                 </p>
               </div>
@@ -120,5 +97,3 @@ function MisSolicitudes() {
     </div>
   );
 }
-
-export default MisSolicitudes;

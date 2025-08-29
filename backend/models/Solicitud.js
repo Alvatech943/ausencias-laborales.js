@@ -1,5 +1,6 @@
 const { DataTypes } = require("sequelize");
 const sequelize = require("../config/db");
+const Dependencia = require("./Dependencia"); 
 const Usuario = require("./Usuario");
 
 const Solicitud = sequelize.define("Solicitud", {
@@ -76,8 +77,15 @@ const Solicitud = sequelize.define("Solicitud", {
   timestamps: false
 });
 
-// Relaciones existentes
-Solicitud.belongsTo(Usuario, { foreignKey: "usuarioId" });
-Usuario.hasMany(Solicitud, { foreignKey: "usuarioId" });
+// Relaciones existentes (con alias)
+Solicitud.belongsTo(Usuario, { as: 'usuario', foreignKey: 'usuarioId' });
+Usuario.hasMany(Solicitud, { as: 'solicitudes', foreignKey: 'usuarioId' });
+
+// añade (auditorías):
+Solicitud.belongsTo(Usuario, { as: 'jefe',       foreignKey: 'aprobado_jefe_por',       constraints: false });
+Solicitud.belongsTo(Usuario, { as: 'secretario', foreignKey: 'aprobado_secretario_por', constraints: false });
+
+// añade (relación con el área/dependencia):
+Solicitud.belongsTo(Dependencia, { as: 'dependencia', foreignKey: 'dependencia_id' });
 
 module.exports = Solicitud;

@@ -3,47 +3,35 @@ import LoginForm from "./components/LoginForm";
 import FormSolicitud from "./components/FormSolicitud";
 import PrivateRoute from "./components/PrivateRoute";
 import MisSolicitudes from "./page/MisSolicitudes";
+import DetalleSolicitud from "./components/DetalleSolicitud";
+import TableroSolicitudes from "./components/TableroSolicitudes";
 import Layout from "./components/Layout";
 
-function App() {
+export default function App() {
   const token = localStorage.getItem("token");
 
   return (
     <Router>
       <Routes>
-        {/* Ruta raíz redirige según si hay token */}
-        <Route
-          path="/"
-          element={token ? <Navigate to="/solicitud" /> : <Navigate to="/login" />}
-        />
+        {/* Raíz */}
+        <Route path="/" element={token ? <Navigate to="/mis-solicitudes" /> : <Navigate to="/login" />} />
 
-        {/* Login */}
+        {/* Pública */}
         <Route path="/login" element={<LoginForm />} />
 
-        {/* Rutas privadas con Layout */}
-        <Route
-          path="/solicitud"
-          element={
-            <PrivateRoute>
-              <Layout>
-                <FormSolicitud />
-              </Layout>
-            </PrivateRoute>
-          }
-        />
-        <Route
-          path="/mis-solicitudes"
-          element={
-            <PrivateRoute>
-              <Layout>
-                <MisSolicitudes />
-              </Layout>
-            </PrivateRoute>
-          }
-        />
+        {/* Privadas bajo Layout */}
+        <Route element={<PrivateRoute><Layout /></PrivateRoute>}>
+          <Route path="mis-solicitudes" element={<MisSolicitudes />} />
+          <Route path="solicitud" element={<FormSolicitud />} />
+          <Route path="solicitudes/:id" element={<DetalleSolicitud mode="view" />} />
+          <Route path="solicitudes/:id/aprobar-jefe" element={<DetalleSolicitud mode="jefe" />} />
+          <Route path="solicitudes/:id/aprobar-secretario" element={<DetalleSolicitud mode="secretario" />} />
+          <Route path="tablero" element={<TableroSolicitudes />} />
+        </Route>
+
+        {/* Fallback */}
+        <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </Router>
   );
 }
-
-export default App;

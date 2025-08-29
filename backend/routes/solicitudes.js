@@ -1,5 +1,5 @@
-// routes/solicitudes.js
 const { Op } = require('sequelize');
+const sequelize = require('../config/db'); // <-- FIX: lo usas en /estadisticas
 const router = require('express').Router();
 
 const Solicitud = require('../models/Solicitud');
@@ -8,9 +8,16 @@ const Dependencia = require('../models/Dependencia');
 const auth = require('../middleware/auth');
 const { esJefeDeArea, esSecretarioDeSecretaria } = require('../lib/permiso');
 
-//Crea una nueva solicitud
+const fs = require("fs");
+const path = require("path");
+const PizZip = require("pizzip");
+const Docxtemplater = require("docxtemplater");
+const ImageModule = require('docxtemplater-image-module-free');
+const sizeOf = require('image-size');
+
+// ---------- Crear nueva ----------
 router.post('/', auth, async (req, res) => {
-  try { 
+  try {
     const user = await Usuario.findByPk(req.user.id);
     if (!user) return res.status(401).json({ error: 'Usuario no válido' });
 
@@ -20,7 +27,7 @@ router.post('/', auth, async (req, res) => {
       nombre_completo, cedula, cargo, secretaria_oficina, area_trabajo,
       estudios, cita_medica, licencia, compensatorio, otro, motivo,
       fecha_horas, numero_horas, hora_inicio, hora_fin,
-      numero_dias, dia_inicio, dia_fin
+      numero_dias, dia_inicio, dia_fin, firma_solicitante
     } = req.body;
 
     const nueva = await Solicitud.create({
@@ -49,6 +56,8 @@ router.post('/', auth, async (req, res) => {
       dia_inicio: dia_inicio || null,
       dia_fin: dia_fin || null,
 
+      firma_solicitante: firma_solicitante || null,
+
       estado: 'pendiente_jefe'
     });
 
@@ -58,31 +67,18 @@ router.post('/', auth, async (req, res) => {
   }
 });
 
-
-function studiosToBool(v) {
-  if (v === true || v === 1 || v === '1' || v === 'true') return true;
-  return false;
-}
-
 router.put('/:id/aprobar-jefe', auth, async (req, res) => {
   try {
     const { id } = req.params;
     const { aprobadoJefe, observaciones } = req.body;
-    const aprobado = 
-    (aprobadoJefe === true || aprobadoJefe === 'true' 
-      || aprobadoJefe === 1 || aprobadoJefe === '1');
-
+    const aprobado = (aprobadoJefe === true || aprobadoJefe === 'true' || aprobadoJefe === 1 || aprobadoJefe === '1');
     const solicitud = await Solicitud.findByPk(id);
-    if (!solicitud) 
-    return res.status(404).json(
-      { error: 'Solicitud no encontrada' }
-    );
+    if (!solicitud) return res.status(404).json({ error: 'Solicitud no encontrada' });
 
     if (solicitud.estado !== 'pendiente_jefe') {
       return res.status(400).json({ error: 'La solicitud no está pendiente del jefe' });
     }
 
-    // Autorización: jefe del área
     const puede = await esJefeDeArea(req.user.id, solicitud.dependencia_id);
     if (!puede) {
       const area = await Dependencia.findByPk(solicitud.dependencia_id);
@@ -98,13 +94,12 @@ router.put('/:id/aprobar-jefe', auth, async (req, res) => {
       });
     }
 
-    // Auditoría jefe
     solicitud.nombre_jefe_inmediato = req.user.usuario;
     solicitud.aprobado_jefe_por = req.user.id;
     solicitud.aprobado_jefe_at = new Date();
     solicitud.obs_jefe = observaciones || null;
-
     solicitud.estado = aprobado ? 'pendiente_secretario' : 'rechazada';
+    solicitud.firma_jefe_inmediato = req.body.firma_jefe_inmediato ?? solicitud.firma_jefe_inmediato;
 
     await solicitud.save();
     res.json(solicitud);
@@ -113,8 +108,6 @@ router.put('/:id/aprobar-jefe', auth, async (req, res) => {
   }
 });
 
-
-/** Aprobar/Rechazar Secretario (de la secretaría padre) */
 router.put('/:id/aprobar-secretario', auth, async (req, res) => {
   try {
     const { id } = req.params;
@@ -123,12 +116,10 @@ router.put('/:id/aprobar-secretario', auth, async (req, res) => {
     const solicitud = await Solicitud.findByPk(id);
     if (!solicitud) return res.status(404).json({ error: 'Solicitud no encontrada' });
 
-    // Debe venir del jefe
     if (solicitud.estado !== 'pendiente_secretario') {
       return res.status(400).json({ error: 'El jefe debe aprobar primero la solicitud' });
     }
 
-    // Autorización: secretario de la secretaría padre
     const puede = await esSecretarioDeSecretaria(req.user.id, solicitud.dependencia_id);
     if (!puede) {
       const area = await Dependencia.findByPk(solicitud.dependencia_id);
@@ -143,11 +134,11 @@ router.put('/:id/aprobar-secretario', auth, async (req, res) => {
       });
     }
 
-    // Auditoría secretario
     solicitud.nombre_secretario = req.user.usuario;
     solicitud.aprobado_secretario_por = req.user.id;
     solicitud.aprobado_secretario_at = new Date();
     solicitud.obs_secretario = observaciones || null;
+    solicitud.firma_secretario = req.body.firma_secretario ?? solicitud.firma_secretario;
 
     const ok = (aprobado === true || aprobado === 'true' || aprobado === 1 || aprobado === '1');
     solicitud.estado = ok ? 'aprobada' : 'rechazada';
@@ -163,33 +154,23 @@ router.put('/:id/aprobar-secretario', auth, async (req, res) => {
   }
 });
 
-
-/** Bandejas:
- * - Empleado: sus solicitudes
- * - Jefe: solicitudes del área donde es jefe (estado cualquiera)
- * - Secretario: solo pendientes de su secretaría (áreas hijas)
- */
+// ---------- Bandejas ----------
 router.get('/mis-solicitudes', auth, async (req, res) => {
   try {
     const userId = req.user.id;
 
-    // ¿Es jefe de alguna área?
     const areasJefe = await Dependencia.findAll({ where: { jefe_usuario_id: userId } });
-    // ¿Es secretario de alguna secretaría?
     const secs = await Dependencia.findAll({ where: { secretario_usuario_id: userId } });
 
     let where = {};
     if (areasJefe.length === 0 && secs.length === 0) {
-      // Empleado
       where = { usuarioId: userId };
     } else if (areasJefe.length > 0) {
-      // Jefe ve solicitudes de sus áreas
       const idsAreas = areasJefe.map(a => a.id);
       where = { dependencia_id: { [Op.in]: idsAreas } };
     }
 
     if (secs.length > 0) {
-      // Secretario ve solo pendientes de sus áreas hijas
       const idsSecretarias = secs.map(s => s.id);
       const areasHijas = await Dependencia.findAll({
         where: { dependencia_padre_id: { [Op.in]: idsSecretarias } },
@@ -207,6 +188,216 @@ router.get('/mis-solicitudes', auth, async (req, res) => {
     res.json(solicitudes);
   } catch (error) {
     res.status(500).json({ error: error.message });
+  }
+});
+
+/* =========
+   IMPORTANTE: rutas específicas ANTES de '/:id'
+   ========= */
+
+// ---------- Board (Jefe/Secretario) ----------
+router.get('/board', auth, async (req, res) => {
+  try {
+    const userId = req.user.id;
+
+    const areasJefe = await Dependencia.findAll({ where: { jefe_usuario_id: userId } });
+    const secretarias = await Dependencia.findAll({ where: { secretario_usuario_id: userId } });
+
+    if (areasJefe.length === 0 && secretarias.length === 0) {
+      return res.status(403).json({ error: 'Solo Jefe o Secretario pueden ver el tablero' });
+    }
+
+    const idsAreasJefe = areasJefe.map(a => a.id);
+
+    let idsAreasSecretario = [];
+    if (secretarias.length > 0) {
+      const idsSecretarias = secretarias.map(s => s.id);
+      const areasHijas = await Dependencia.findAll({
+        where: { dependencia_padre_id: { [Op.in]: idsSecretarias } },
+        attributes: ['id']
+      });
+      idsAreasSecretario = areasHijas.map(a => a.id);
+    }
+
+    const areaIds = Array.from(new Set([...idsAreasJefe, ...idsAreasSecretario]));
+    if (areaIds.length === 0) {
+      return res.json({ totals: {}, byArea: [], items: [] });
+    }
+
+    const items = await Solicitud.findAll({
+      where: { dependencia_id: { [Op.in]: areaIds } },
+      include: [
+        { model: Usuario, as: 'usuario', attributes: ['id', 'usuario', 'nombre', 'cedula'] },
+        { model: Dependencia, as: 'dependencia', attributes: ['id', 'nombre'] },
+      ],
+      order: [['fecha', 'DESC']],
+    });
+
+    const totals = { pendiente_jefe: 0, pendiente_secretario: 0, aprobada: 0, rechazada: 0 };
+    const byAreaMap = new Map();
+
+    for (const s of items) {
+      if (totals.hasOwnProperty(s.estado)) totals[s.estado]++;
+      const area = s.dependencia?.nombre || '—';
+      if (!byAreaMap.has(area)) {
+        byAreaMap.set(area, {
+          area,
+          pendiente_jefe: 0,
+          pendiente_secretario: 0,
+          aprobada: 0,
+          rechazada: 0,
+          total: 0,
+        });
+      }
+      const row = byAreaMap.get(area);
+      if (row.hasOwnProperty(s.estado)) row[s.estado]++;
+      row.total++;
+    }
+
+    const byArea = Array.from(byAreaMap.values()).sort((a, b) => b.total - a.total);
+
+    res.json({ totals, byArea, items });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: err.message || 'Error construyendo el tablero' });
+  }
+});
+
+// ---------- Estadísticas simples ----------
+router.get('/estadisticas', auth, async (req, res) => {
+  try {
+    const stats = await Solicitud.findAll({
+      attributes: [
+        'estado',
+        [sequelize.fn('COUNT', sequelize.col('id')), 'total']
+      ],
+      group: ['estado']
+    });
+    res.json(stats);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ---------- Word (usar antes que '/:id' también, por si acaso) ----------
+router.get('/:id/word', auth, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const s = await Solicitud.findByPk(id, {
+      include: [
+        { model: Usuario, as: 'usuario' },
+        { model: Usuario, as: 'jefe' },
+        { model: Usuario, as: 'secretario' },
+        { model: Dependencia, as: 'dependencia' },
+      ],
+    });
+    if (!s) return res.status(404).json({ error: 'Solicitud no encontrada' });
+    if (s.estado !== 'aprobada') {
+      return res.status(400).json({ error: 'Solo se puede descargar cuando está aprobada' });
+    }
+
+    const fmtFecha = (d) => (d ? new Date(d).toLocaleDateString('es-CO') : '');
+    const ctx = {
+      fecha: s.fecha ? new Date(s.fecha).toLocaleDateString('es-CO') : '',
+      nombre_completo: s.nombre_completo || s.usuario?.nombre || '',
+      cedula: s.cedula || s.usuario?.cedula || '',
+      cargo: s.cargo || '',
+      dependencia_id: s.dependencia?.nombre || '', // <-- FIX aquí
+      area_trabajo: s.area_trabajo || '',
+      estudios: s.estudios ? 'X' : '',
+      cita_medica: s.cita_medica ? 'X' : '',
+      licencia: s.licencia ? 'X' : '',
+      compensatorio: s.compensatorio ? 'X' : '',
+      otro: s.otro ? 'X' : '',
+      motivo: s.motivo || '',
+
+      numero_dias: s.numero_dias ?? '',
+      numero_horas: s.numero_horas ?? '',
+      dia_inicio: fmtFecha(s.dia_inicio),
+      dia_fin: fmtFecha(s.dia_fin),
+      hora_inicio: s.hora_inicio || '',
+      hora_fin: s.hora_fin || '',
+
+      obs_jefe: s.obs_jefe || '',
+      obs_secretario: s.obs_secretario || '',
+
+      ajusta_ley_si: s.ajusta_ley_si ? 'X' : '',
+      ajusta_ley_no: s.ajusta_ley_no ? 'X' : '',
+
+      nombre_jefe_inmediato: s.nombre || s.jefe?.nombre || '',
+      nombre_secretario: s.nombre || s.secretario?.nombre || '',
+      firma_solicitante: s.firma_solicitante || '',
+      firma_jefe_inmediato: s.firma_jefe_inmediato || '',
+      firma_secretario: s.firma_secretario || '',
+    };
+
+    const templatePath = path.join(__dirname, '../templates', 'A-GTH-F-17 Ausentismo Laboral.docx');
+    const content = fs.readFileSync(templatePath, 'binary');
+    const zip = new PizZip(content);
+
+    const BLANK_PX = Buffer.from(
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMB/azl4wAAAABJRU5ErkJggg==',
+      'base64'
+    );
+
+    const imageModule = new ImageModule({
+      centered: false,
+      getImage(tagValue) {
+        if (!tagValue) return BLANK_PX;
+        const b64 = String(tagValue).includes(',') ? String(tagValue).split(',')[1] : String(tagValue);
+        try { return Buffer.from(b64, 'base64'); } catch { return BLANK_PX; }
+      },
+      getSize(img) {
+        try {
+          const dim = sizeOf(img);
+          const maxW = 400, maxH = 150;
+          let { width: w, height: h } = dim;
+          if (!w || !h) return [200, 60];
+          const r = Math.min(maxW / w, maxH / h, 1);
+          return [Math.round(w * r), Math.round(h * r)];
+        } catch {
+          return [200, 60];
+        }
+      },
+    });
+
+    const doc = new Docxtemplater(zip, {
+      paragraphLoop: true,
+      linebreaks: true,
+      delimiters: { start: '<<', end: '>>' },
+      modules: [imageModule],
+    });
+
+    doc.setData(ctx);
+    doc.render();
+
+    const buf = doc.getZip().generate({ type: 'nodebuffer' });
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+    res.setHeader('Content-Disposition', `attachment; filename="A-GTH-F-17 Ausentismo Laboral_${s.id}.docx"`);
+    res.send(buf);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: err.message || 'Error generando el documento' });
+  }
+});
+
+// ---------- Detalle por ID (última) ----------
+router.get('/:id', auth, async (req, res) => {
+  const { id } = req.params;
+  try {
+    const sol = await Solicitud.findByPk(id, {
+      include: [
+        { model: Usuario, as: 'usuario',    attributes: ['id', 'usuario', 'nombre', 'cedula'] },
+        { model: Usuario, as: 'jefe',       attributes: ['id', 'usuario', 'nombre'] },
+        { model: Usuario, as: 'secretario', attributes: ['id', 'usuario', 'nombre'] },
+        { model: Dependencia, as: 'dependencia', attributes: ['id', 'nombre'] },
+      ],
+    });
+    if (!sol) return res.status(404).json({ error: 'No encontrada' });
+    res.json(sol);
+  } catch (e) {
+    console.error('SQL MSG:', e?.parent?.sqlMessage || e?.original?.sqlMessage || e.message);
+    res.status(500).json({ error: 'Error cargando solicitud' });
   }
 });
 
