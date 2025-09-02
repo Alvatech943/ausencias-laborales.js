@@ -1,249 +1,502 @@
 // src/components/TableroSolicitudes.jsx
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import api from "../api";
-import { BarChart2, Clock, Shield, CheckCircle2, XCircle } from "lucide-react";
+import { BarChart2, Search, Filter, RotateCcw, Calendar } from "lucide-react";
+
+// Debounce hook para inputs (evita llamadas en cada tecla)
+function useDebounce(value, delay = 350) {
+  const [debounced, setDebounced] = useState(value);
+  useEffect(() => {
+    const id = setTimeout(() => setDebounced(value), delay);
+    return () => clearTimeout(id);
+  }, [value, delay]);
+  return debounced;
+}
 
 export default function TableroSolicitudes() {
   const [data, setData] = useState(null);
   const [err, setErr] = useState("");
-  const [loading, setLoading] = useState(true);
+  const [initialLoading, setInitialLoading] = useState(true);
+  const [fetching, setFetching] = useState(false); // para actualizaciones sin parpadeo
+  const [page, setPage] = useState(1);
   const navigate = useNavigate();
 
   const rol = (localStorage.getItem("rol") || "").toLowerCase();
+
+  // --- Filtros controlados ---
+  const [q, setQ] = useState("");
+  const [estado, setEstado] = useState([]); // ['pendiente_jefe','aprobada',...]
+  const [areaId, setAreaId] = useState("");
+  const [from, setFrom] = useState("");
+  const [to, setTo] = useState("");
+  const [dir, setDir] = useState("DESC");
+  const [limit, setLimit] = useState(50);
+  const [sort, setSort] = useState("fecha");
+
+  // Debounce solo para q (texto). El resto puede disparar fetch inmediato.
+  const qDebounced = useDebounce(q, 350);
+
+  // Cancelación de requests
+  const abortRef = useRef(null);
 
   useEffect(() => {
     if (!["jefe", "secretario"].includes(rol)) {
       navigate("/mis-solicitudes", { replace: true });
       return;
     }
-    (async () => {
-      try {
-        const { data } = await api.get("/solicitudes/board");
-        setData(data);
-      } catch (e) {
-        setErr(e?.response?.data?.error || "No se pudo cargar el tablero");
-      } finally {
-        setLoading(false);
-      }
-    })();
-  }, [rol, navigate]);
+    // Carga inicial
+    loadBoard(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rol]);
 
-  if (loading) return <SkeletonTablero />;
+  // Efecto: refetch al cambiar filtros. Si cambia el texto o cualquier filtro, vuelve a página 1.
+  useEffect(() => {
+    setPage(1);
+  }, [qDebounced, estado, areaId, from, to, dir, limit, sort]);
+
+  useEffect(() => {
+    // cuando los filtros (debounced) o page cambien, recargar
+    loadBoard(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [qDebounced, estado, areaId, from, to, dir, limit, sort, page]);
+
+  function buildParams() {
+    return {
+      q: qDebounced || undefined,
+      estado: estado.length ? estado.join(",") : undefined,
+      areaId: areaId || undefined,
+      from: from || undefined,
+      to: to || undefined,
+      sort,
+      dir,
+      page,
+      limit,
+    };
+  }
+
+  async function loadBoard(isFirst = false) {
+    try {
+      setErr("");
+      if (abortRef.current) abortRef.current.abort();
+      const controller = new AbortController();
+      abortRef.current = controller;
+
+      if (isFirst) setInitialLoading(true);
+      else setFetching(true);
+
+      const { data } = await api.get("/solicitudes/board", {
+        params: buildParams(),
+        signal: controller.signal,
+      });
+
+      setData(data);
+    } catch (e) {
+      if (e.name !== "CanceledError" && e.name !== "AbortError") {
+        setErr(e?.response?.data?.error || "No se pudo cargar el tablero");
+      }
+    } finally {
+      setInitialLoading(false);
+      setFetching(false);
+    }
+  }
+
+  // UI helpers
+  const total = useMemo(() => {
+    if (!data) return 0;
+    const t = data.totals || {};
+    return (t.pendiente_jefe || 0) + (t.pendiente_secretario || 0) + (t.aprobada || 0) + (t.rechazada || 0);
+  }, [data]);
+
+  const activeFiltersCount = useMemo(() => {
+    return (q ? 1 : 0) + estado.length + (areaId ? 1 : 0) + (from ? 1 : 0) + (to ? 1 : 0);
+  }, [q, estado, areaId, from, to]);
+
+  function onToggleEstado(k) {
+    setEstado((prev) => (prev.includes(k) ? prev.filter((x) => x !== k) : [...prev, k]));
+  }
+  function clearFilters() {
+    setQ("");
+    setEstado([]);
+    setAreaId("");
+    setFrom("");
+    setTo("");
+    setDir("DESC");
+    setLimit(50);
+    setSort("fecha");
+    setPage(1);
+  }
+
+  if (initialLoading) return <div className="p-6 text-gray-600">Cargando tablero…</div>;
   if (err) return <div className="p-6 text-red-600">{err}</div>;
   if (!data) return null;
 
   const T = data.totals || {};
-  const total = (T.pendiente_jefe || 0) + (T.pendiente_secretario || 0) + (T.aprobada || 0) + (T.rechazada || 0);
+  const pagination = data.pagination || { page: 1, pages: 1, count: 0, limit: 50 };
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 relative">
+      {/* Indicador de actualización suave */}
+      {fetching && (
+        <div className="absolute top-0 left-0 right-0 h-1">
+          <div className="h-full w-full animate-pulse bg-gradient-to-r from-blue-200 via-blue-400 to-blue-200" />
+        </div>
+      )}
+
       {/* Header */}
-      <header className="relative overflow-hidden rounded-2xl border bg-gradient-to-br from-sky-50 via-white to-emerald-50 p-6">
-        <div className="flex items-center gap-3">
-          <span className="inline-flex h-10 w-10 items-center justify-center rounded-full bg-sky-100 text-sky-700">
-            <BarChart2 size={20} />
-          </span>
-          <div>
-            <h1 className="text-2xl font-bold text-gray-900">Tablero de Solicitudes</h1>
-            <p className="text-sm text-gray-500">Vista consolidada por estado y área</p>
-          </div>
-          <span className="ml-auto text-xs text-gray-600">
-            Rol:&nbsp;<b className="uppercase">{rol}</b>
-          </span>
+      <div className="flex items-center gap-3">
+        <div className="p-2 rounded-xl bg-blue-50 text-blue-600">
+          <BarChart2 />
         </div>
-      </header>
-
-      {/* KPIs */}
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <Kpi
-          title="Pendiente Jefe"
-          value={T.pendiente_jefe || 0}
-          accent="from-amber-50 to-amber-100"
-          ring="ring-amber-200"
-          icon={<Clock className="opacity-80" size={18} />}
-        />
-        <Kpi
-          title="Pendiente Secretario"
-          value={T.pendiente_secretario || 0}
-          accent="from-blue-50 to-blue-100"
-          ring="ring-blue-200"
-          icon={<Shield className="opacity-80" size={18} />}
-        />
-        <Kpi
-          title="Aprobadas"
-          value={T.aprobada || 0}
-          accent="from-emerald-50 to-emerald-100"
-          ring="ring-emerald-200"
-          icon={<CheckCircle2 className="opacity-80" size={18} />}
-        />
-        <Kpi
-          title="Rechazadas"
-          value={T.rechazada || 0}
-          accent="from-rose-50 to-rose-100"
-          ring="ring-rose-200"
-          icon={<XCircle className="opacity-80" size={18} />}
-        />
-      </div>
-
-      {/* Distribución por estado */}
-      <Card title="Distribución por estado" subtitle={total ? `${total} total` : ""}>
-        <FancyBarChart totals={T} total={total} />
-        <Legend />
-      </Card>
-
-      {/* Doble panel: Por área + Tabla */}
-      <div className="grid gap-6 lg:grid-cols-2">
-        <Card title="Por área">
-          <div className="overflow-x-auto rounded-lg border">
-            <table className="min-w-full text-sm">
-              <thead className="sticky top-0 bg-gray-50 text-left text-gray-600">
-                <tr>
-                  <Th>Área</Th>
-                  <Th>Pend. Jefe</Th>
-                  <Th>Pend. Secretario</Th>
-                  <Th>Aprobadas</Th>
-                  <Th>Rechazadas</Th>
-                  <Th>Total</Th>
-                </tr>
-              </thead>
-              <tbody className="divide-y">
-                {data.byArea.map((r) => (
-                  <tr key={r.area} className="odd:bg-gray-50/40 hover:bg-gray-50/80">
-                    <Td className="font-medium">{r.area}</Td>
-                    <Td>{r.pendiente_jefe || 0}</Td>
-                    <Td>{r.pendiente_secretario || 0}</Td>
-                    <Td>{r.aprobada || 0}</Td>
-                    <Td>{r.rechazada || 0}</Td>
-                    <Td className="font-semibold">{r.total || 0}</Td>
-                  </tr>
-                ))}
-                {data.byArea.length === 0 && (
-                  <tr>
-                    <td colSpan={6} className="py-6 text-center text-gray-500">
-                      Sin registros
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
-        </Card>
-
-        <Card title={`Solicitudes (${data.items.length})`}>
-          <div className="overflow-x-auto rounded-lg border">
-            <table className="min-w-full text-sm">
-              <thead className="sticky top-0 bg-gray-50 text-left text-gray-600">
-                <tr>
-                  <Th>ID</Th>
-                  <Th>Empleado</Th>
-                  <Th>Área</Th>
-                  <Th>Motivo</Th>
-                  <Th>Estado</Th>
-                  <Th>Fecha</Th>
-                </tr>
-              </thead>
-              <tbody className="divide-y">
-                {data.items.map((s) => (
-                  <tr key={s.id} className="odd:bg-gray-50/40 hover:bg-gray-50/80">
-                    <Td>
-                      <button
-                        className="text-blue-600 underline-offset-2 hover:underline"
-                        onClick={() => navigate(`/solicitudes/${s.id}`)}
-                      >
-                        #{s.id}
-                      </button>
-                    </Td>
-                    <Td>{s.nombre_completo || s.usuario?.nombre || "—"}</Td>
-                    <Td>{s.dependencia?.nombre || "—"}</Td>
-                    <Td className="truncate max-w-[260px]">{(s.motivo || renderTipo(s)) || "—"}</Td>
-                    <Td>
-                      <EstadoPill estado={s.estado} />
-                    </Td>
-                    <Td>{fmt(s.fecha)}</Td>
-                  </tr>
-                ))}
-                {data.items.length === 0 && (
-                  <tr>
-                    <td colSpan={6} className="py-6 text-center text-gray-500">
-                      Sin registros
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
-        </Card>
-      </div>
-    </div>
-  );
-}
-
-/* -------------------------- UI helpers -------------------------- */
-
-function SkeletonTablero() {
-  return (
-    <div className="space-y-6 p-2">
-      <div className="h-24 rounded-2xl border bg-white shadow-sm" />
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        {[...Array(4)].map((_, i) => (
-          <div key={i} className="h-24 animate-pulse rounded-2xl border bg-white shadow-sm" />
-        ))}
-      </div>
-      <div className="h-60 animate-pulse rounded-2xl border bg-white shadow-sm" />
-      <div className="grid gap-6 lg:grid-cols-2">
-        <div className="h-72 animate-pulse rounded-2xl border bg-white shadow-sm" />
-        <div className="h-72 animate-pulse rounded-2xl border bg-white shadow-sm" />
-      </div>
-    </div>
-  );
-}
-
-function Card({ title, subtitle, children }) {
-  return (
-    <div className="rounded-2xl border bg-white p-5 shadow-sm">
-      <div className="mb-4 flex items-end justify-between">
-        <div>
-          <h3 className="font-semibold text-gray-900">{title}</h3>
-          {subtitle && <p className="text-xs text-gray-500">{subtitle}</p>}
-        </div>
-      </div>
-      {children}
-    </div>
-  );
-}
-
-function Kpi({ title, value, icon, accent = "from-gray-50 to-gray-100", ring = "ring-gray-200" }) {
-  return (
-    <div className={`rounded-2xl border p-4 shadow-sm ring-1 ${ring} bg-gradient-to-br ${accent}`}>
-      <div className="flex items-center justify-between">
-        <p className="text-xs font-medium text-gray-600">{title}</p>
-        <span className="inline-flex items-center justify-center rounded-full bg-white/70 p-1.5 shadow-sm">
-          {icon}
+        <h1 className="text-2xl font-bold text-gray-800">Tablero de Solicitudes</h1>
+        <span className="ml-auto text-sm text-gray-500">
+          Rol: <b className="uppercase">{rol}</b>
         </span>
       </div>
-      <p className="mt-2 text-3xl font-bold tracking-tight text-gray-900">{value}</p>
+
+      {/* Filtros */}
+      <div className="bg-white border rounded-2xl p-4 shadow-sm">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-12 gap-3">
+          {/* Búsqueda (span 4 en lg) */}
+          <div className="lg:col-span-4">
+            <label className="text-xs text-gray-600">Buscar</label>
+            <div className="mt-1 flex items-center gap-2 rounded-lg border px-3 py-2 focus-within:ring-2 focus-within:ring-blue-200">
+              <Search size={16} className="text-gray-400" />
+              <input
+                type="search"
+                value={q}
+                onChange={(e) => setQ(e.target.value)}
+                placeholder="Nombre completo, usuario, motivo o cédula…"
+                className="w-full outline-none text-sm"
+                autoComplete="off"
+              />
+            </div>
+            <p className="mt-1 text-[11px] text-gray-500">
+              Escribe y verás resultados al instante (separar palabras ayuda).
+            </p>
+          </div>
+
+          {/* Estado (chips) - span 4 en lg */}
+          <div className="lg:col-span-4">
+            <label className="text-xs text-gray-600 block">Estado</label>
+            <div className="mt-1 flex flex-wrap items-center gap-2">
+              {[
+                { k: "pendiente_jefe", label: "Pend. Jefe" },
+                { k: "pendiente_secretario", label: "Pend. Sec." },
+                { k: "aprobada", label: "Aprobada" },
+                { k: "rechazada", label: "Rechazada" },
+              ].map((e) => (
+                <button
+                  key={e.k}
+                  onClick={() => onToggleEstado(e.k)}
+                  className={`px-2.5 py-1 rounded-full border text-xs transition ${
+                    estado.includes(e.k)
+                      ? "bg-blue-600 text-white border-blue-600 shadow-sm"
+                      : "bg-white text-gray-700 hover:bg-gray-50"
+                  }`}
+                >
+                  {e.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Área - span 4 en lg */}
+          <div className="lg:col-span-4">
+            <label className="text-xs text-gray-600">Área</label>
+            <select
+              value={areaId}
+              onChange={(e) => setAreaId(e.target.value)}
+              className="mt-1 w-full rounded-lg border px-3 py-2 text-sm bg-white"
+            >
+              <option value="">(Todas)</option>
+              {(data.areas || []).map((a) => (
+                <option key={a.id} value={a.id}>
+                  {a.nombre}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {/* Fechas - span 4 en lg */}
+          <div className="lg:col-span-4">
+            <label className="text-xs text-gray-600 block">Rango de fechas</label>
+            <div className="mt-1 grid grid-cols-2 gap-2">
+              <div className="flex items-center gap-2 rounded-lg border px-3 py-2">
+                <Calendar size={16} className="text-gray-400" />
+                <input
+                  type="date"
+                  value={from}
+                  onChange={(e) => setFrom(e.target.value)}
+                  className="outline-none text-sm w-full"
+                />
+              </div>
+              <div className="flex items-center gap-2 rounded-lg border px-3 py-2">
+                <Calendar size={16} className="text-gray-400" />
+                <input
+                  type="date"
+                  value={to}
+                  onChange={(e) => setTo(e.target.value)}
+                  className="outline-none text-sm w-full"
+                />
+              </div>
+            </div>
+          </div>
+
+          {/* Orden/limite/acciones - span 4 en lg */}
+          <div className="lg:col-span-4 flex flex-col sm:flex-row sm:items-end gap-2">
+            <div className="flex-1">
+              <label className="text-xs text-gray-600">Ordenar por</label>
+              <select
+                value={sort}
+                onChange={(e) => setSort(e.target.value)}
+                className="mt-1 w-full rounded-lg border px-3 py-2 text-sm bg-white"
+              >
+                <option value="fecha">Fecha</option>
+                <option value="id">ID</option>
+                <option value="estado">Estado</option>
+              </select>
+            </div>
+            <div>
+              <label className="text-xs text-gray-600">Dirección</label>
+              <select
+                value={dir}
+                onChange={(e) => setDir(e.target.value)}
+                className="mt-1 rounded-lg border px-3 py-2 text-sm bg-white"
+              >
+                <option value="DESC">Más recientes</option>
+                <option value="ASC">Más antiguos</option>
+              </select>
+            </div>
+            <div>
+              <label className="text-xs text-gray-600">Por página</label>
+              <select
+                value={limit}
+                onChange={(e) => setLimit(Number(e.target.value))}
+                className="mt-1 rounded-lg border px-3 py-2 text-sm bg-white"
+              >
+                {[10, 20, 50, 100].map((n) => (
+                  <option key={n} value={n}>
+                    {n}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <button
+              onClick={clearFilters}
+              className="h-9 mt-1 sm:mt-0 inline-flex items-center gap-2 px-3 rounded-lg border bg-white hover:bg-gray-50 text-sm"
+              title="Limpiar filtros"
+            >
+              <RotateCcw size={16} /> Limpiar
+            </button>
+          </div>
+
+          {/* Resumen filtros activos */}
+          <div className="lg:col-span-12 flex items-center justify-end text-xs text-gray-500 gap-2">
+            <Filter size={14} />
+            filtros activos: <b>{activeFiltersCount}</b>
+          </div>
+        </div>
+      </div>
+
+      {/* KPIs */}
+      <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-3">
+        <Kpi title="Pendiente Jefe" value={T.pendiente_jefe || 0} color="amber" />
+        <Kpi title="Pendiente Secretario" value={T.pendiente_secretario || 0} color="blue" />
+        <Kpi title="Aprobadas" value={T.aprobada || 0} color="emerald" />
+        <Kpi title="Rechazadas" value={T.rechazada || 0} color="rose" />
+      </div>
+
+      {/* Gráfica simple */}
+      <div className="bg-white border rounded-2xl p-5 shadow-sm">
+        <h3 className="font-semibold text-gray-900 mb-4">Distribución por estado</h3>
+        <SimpleBarChart totals={T} total={total} />
+      </div>
+
+      {/* Por área */}
+      <div className="bg-white border rounded-2xl p-5 shadow-sm">
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="font-semibold text-gray-900">Por área</h3>
+          <span className="text-xs text-gray-500">
+            Mostrando <b>{data.byArea.length}</b> áreas
+          </span>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="min-w-full text-sm">
+            <thead className="text-left text-gray-600">
+              <tr>
+                <th className="py-2 pr-4">Área</th>
+                <th className="py-2 pr-4">Pend. Jefe</th>
+                <th className="py-2 pr-4">Pend. Secretario</th>
+                <th className="py-2 pr-4">Aprobadas</th>
+                <th className="py-2 pr-4">Rechazadas</th>
+                <th className="py-2 pr-4">Total</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y">
+              {data.byArea.map((r) => (
+                <tr key={r.area} className="odd:bg-gray-50/50">
+                  <td className="py-2 pr-4 font-medium">{r.area}</td>
+                  <td className="py-2 pr-4">{r.pendiente_jefe || 0}</td>
+                  <td className="py-2 pr-4">{r.pendiente_secretario || 0}</td>
+                  <td className="py-2 pr-4">{r.aprobada || 0}</td>
+                  <td className="py-2 pr-4">{r.rechazada || 0}</td>
+                  <td className="py-2 pr-4">{r.total || 0}</td>
+                </tr>
+              ))}
+              {data.byArea.length === 0 && (
+                <tr>
+                  <td colSpan={6} className="py-4 text-center text-gray-500">
+                    Sin registros
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* Tabla de solicitudes + paginación */}
+      <div className="bg-white border rounded-2xl p-5 shadow-sm">
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="font-semibold text-gray-900">
+            Solicitudes ({data.items.length}) {fetching && <span className="text-xs text-gray-400"> · actualizando…</span>}
+          </h3>
+          <div className="text-xs text-gray-500">
+            Total coincidencias: <b>{pagination.count}</b>
+          </div>
+        </div>
+
+        <div className="overflow-x-auto">
+          <table className="min-w-full text-sm">
+            <thead className="text-left text-gray-600">
+              <tr>
+                <th className="py-2 pr-4">ID</th>
+                <th className="py-2 pr-4">Empleado</th>
+                <th className="py-2 pr-4">Área</th>
+                <th className="py-2 pr-4">Motivo</th>
+                <th className="py-2 pr-4">Estado</th>
+                <th className="py-2 pr-4">Fecha</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y">
+              {data.items.map((s) => (
+                <tr key={s.id} className="odd:bg-gray-50/50">
+                  <td className="py-2 pr-4">
+                    <button
+                      className="text-blue-600 hover:underline"
+                      onClick={() => navigate(`/solicitudes/${s.id}`)}
+                    >
+                      #{s.id}
+                    </button>
+                  </td>
+                  <td className="py-2 pr-4">{s.nombre || s.usuario?.nombre || "—"}</td>
+                  <td className="py-2 pr-4">{s.dependencia?.nombre || "—"}</td>
+                  <td className="py-2 pr-4 truncate max-w-[260px]">{(s.motivo || renderTipo(s)) || "—"}</td>
+                  <td className="py-2 pr-4">
+                    <EstadoPill estado={s.estado} />
+                  </td>
+                  <td className="py-2 pr-4">{fmt(s.fecha)}</td>
+                </tr>
+              ))}
+              {data.items.length === 0 && (
+                <tr>
+                  <td colSpan={6} className="py-4 text-center text-gray-500">
+                    Sin registros
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+
+        {/* Paginación */}
+        <div className="mt-4 flex flex-wrap items-center justify-between gap-2 text-sm">
+          <div className="text-gray-600">
+            Página <b>{pagination.page}</b> de <b>{pagination.pages}</b>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setPage((p) => Math.max(p - 1, 1))}
+              disabled={pagination.page <= 1}
+              className="px-3 py-1.5 rounded-lg border bg-white enabled:hover:bg-gray-50 disabled:opacity-40"
+            >
+              Anterior
+            </button>
+            <button
+              onClick={() => setPage((p) => Math.min(p + 1, pagination.pages))}
+              disabled={pagination.page >= pagination.pages}
+              className="px-3 py-1.5 rounded-lg border bg-white enabled:hover:bg-gray-50 disabled:opacity-40"
+            >
+              Siguiente
+            </button>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
 
-function Th({ children }) {
-  return <th className="py-2.5 pr-4 text-xs font-semibold uppercase tracking-wide">{children}</th>;
+function Kpi({ title, value, color = "gray" }) {
+  const map = {
+    amber: "bg-amber-50 border-amber-200 text-amber-800",
+    blue: "bg-blue-50 border-blue-200 text-blue-800",
+    emerald: "bg-emerald-50 border-emerald-200 text-emerald-800",
+    rose: "bg-rose-50 border-rose-200 text-rose-800",
+    gray: "bg-gray-50 border-gray-200 text-gray-800",
+  };
+  return (
+    <div className={`rounded-2xl border p-4 ${map[color]}`}>
+      <p className="text-xs opacity-80">{title}</p>
+      <p className="text-2xl font-bold mt-1">{value}</p>
+    </div>
+  );
 }
-function Td({ className = "", children }) {
-  return <td className={`py-2.5 pr-4 align-top text-gray-700 ${className}`}>{children}</td>;
+
+function SimpleBarChart({ totals }) {
+  const items = [
+    { key: "pendiente_jefe", label: "Pend. Jefe", className: "bg-amber-500" },
+    { key: "pendiente_secretario", label: "Pend. Secretario", className: "bg-blue-500" },
+    { key: "aprobada", label: "Aprobada", className: "bg-emerald-500" },
+    { key: "rechazada", label: "Rechazada", className: "bg-rose-500" },
+  ];
+  const maxVal = Math.max(...items.map((i) => totals[i.key] || 0), 1);
+
+  return (
+    <div className="grid grid-cols-4 gap-4 items-end h-48">
+      {items.map((i) => {
+        const v = totals[i.key] || 0;
+        const h = Math.round((v / maxVal) * 100);
+        return (
+          <div key={i.key} className="flex flex-col items-center">
+            <div className="w-12 rounded-t-md" style={{ height: `${h}%` }}>
+              <div className={`h-full w-full rounded-t-md ${i.className}`}></div>
+            </div>
+            <div className="mt-2 text-xs text-gray-600 text-center">
+              <div className="font-semibold">{v}</div>
+              <div>{i.label}</div>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
 }
 
 function EstadoPill({ estado }) {
   const map = {
-    pendiente_jefe: "bg-amber-50 text-amber-800 ring-amber-200",
-    pendiente_secretario: "bg-blue-50 text-blue-800 ring-blue-200",
-    aprobada: "bg-emerald-50 text-emerald-800 ring-emerald-200",
-    rechazada: "bg-rose-50 text-rose-800 ring-rose-200",
+    pendiente_jefe: "bg-amber-50 text-amber-800 border-amber-200",
+    pendiente_secretario: "bg-blue-50 text-blue-800 border-blue-200",
+    aprobada: "bg-emerald-50 text-emerald-800 border-emerald-200",
+    rechazada: "bg-rose-50 text-rose-800 border-rose-200",
   };
-  const cls = map[estado] || "bg-gray-50 text-gray-700 ring-gray-200";
   return (
-    <span className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ring-1 ${cls}`}>
+    <span
+      className={`px-2.5 py-0.5 text-xs rounded-full border font-medium ${
+        map[estado] || "bg-gray-50 text-gray-700 border-gray-200"
+      }`}
+    >
       {estado}
     </span>
   );
@@ -260,65 +513,4 @@ function renderTipo(s) {
   if (s.compensatorio) arr.push("Compensatorio");
   if (s.otro) arr.push("Otro");
   return arr.join(", ");
-}
-
-/* ----------------------- Chart (CSS only) ----------------------- */
-
-function FancyBarChart({ totals, total }) {
-  const items = [
-    { key: "pendiente_jefe", label: "Pend. Jefe", bar: "bg-amber-500" },
-    { key: "pendiente_secretario", label: "Pend. Secretario", bar: "bg-blue-500" },
-    { key: "aprobada", label: "Aprobada", bar: "bg-emerald-500" },
-    { key: "rechazada", label: "Rechazada", bar: "bg-rose-500" },
-  ];
-  const maxVal = Math.max(...items.map((i) => totals[i.key] || 0), 1);
-
-  return (
-    <div className="grid grid-cols-4 items-end gap-6 sm:gap-8">
-      {items.map((i) => {
-        const v = totals[i.key] || 0;
-        const h = Math.round((v / maxVal) * 100);
-        const pct = total ? Math.round((v / total) * 100) : 0;
-
-        return (
-          <div key={i.key} className="flex flex-col items-center">
-            <div className="relative w-12 sm:w-14">
-              {/* Track */}
-              <div className="h-44 w-full rounded-lg bg-gray-100 ring-1 ring-gray-200" />
-              {/* Bar */}
-              <div
-                className={`absolute bottom-0 left-0 w-full rounded-lg ${i.bar} shadow-sm transition-[height] duration-500`}
-                style={{ height: `${h}%` }}
-                title={`${i.label}: ${v} (${pct}%)`}
-              />
-            </div>
-            <div className="mt-2 text-center text-xs text-gray-600">
-              <div className="font-semibold">{v}</div>
-              <div className="opacity-80">{i.label}</div>
-              {total > 0 && <div className="text-[10px] text-gray-500">{pct}%</div>}
-            </div>
-          </div>
-        );
-      })}
-    </div>
-  );
-}
-
-function Legend() {
-  const dots = [
-    { c: "bg-amber-500", t: "Pend. Jefe" },
-    { c: "bg-blue-500", t: "Pend. Secretario" },
-    { c: "bg-emerald-500", t: "Aprobadas" },
-    { c: "bg-rose-500", t: "Rechazadas" },
-  ];
-  return (
-    <div className="mt-4 flex flex-wrap gap-4 text-xs text-gray-600">
-      {dots.map((d) => (
-        <span key={d.t} className="inline-flex items-center gap-2">
-          <span className={`h-2 w-2 rounded-full ${d.c}`} />
-          {d.t}
-        </span>
-      ))}
-    </div>
-  );
 }

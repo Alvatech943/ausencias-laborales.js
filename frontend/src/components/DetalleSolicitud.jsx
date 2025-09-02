@@ -260,8 +260,8 @@ export default function DetalleSolicitud({ mode = "view" }) {
         <Section title="Datos del solicitante" subtitle="Información básica y motivo de la ausencia.">
           <div className="grid md:grid-cols-2 gap-3">
             <Field label="Nombre" value={sol.nombre_completo || sol.usuario?.nombre} />
+            <Field label="Cargo" value={sol.cargo} />
             <Field label="Cédula" value={sol.cedula || sol.usuario?.cedula} />
-            <Field label="Usuario" value={sol.usuario?.usuario} />
             <Field label="Área" value={sol.area_trabajo} />
           </div>
 

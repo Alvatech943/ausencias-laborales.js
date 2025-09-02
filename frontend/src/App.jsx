@@ -2,9 +2,11 @@ import { BrowserRouter as Router, Routes, Route, Navigate } from "react-router-d
 import LoginForm from "./components/LoginForm";
 import FormSolicitud from "./components/FormSolicitud";
 import PrivateRoute from "./components/PrivateRoute";
+import AdminRoute from "./components/AdminRoute";      // ← nuevo
 import MisSolicitudes from "./page/MisSolicitudes";
 import DetalleSolicitud from "./components/DetalleSolicitud";
 import TableroSolicitudes from "./components/TableroSolicitudes";
+import AdminDashboard from "./components/AdminDashboard";
 import Layout from "./components/Layout";
 
 export default function App() {
@@ -19,7 +21,7 @@ export default function App() {
         {/* Pública */}
         <Route path="/login" element={<LoginForm />} />
 
-        {/* Privadas bajo Layout */}
+        {/* Privadas bajo Layout (usa Outlet) */}
         <Route element={<PrivateRoute><Layout /></PrivateRoute>}>
           <Route path="mis-solicitudes" element={<MisSolicitudes />} />
           <Route path="solicitud" element={<FormSolicitud />} />
@@ -27,6 +29,16 @@ export default function App() {
           <Route path="solicitudes/:id/aprobar-jefe" element={<DetalleSolicitud mode="jefe" />} />
           <Route path="solicitudes/:id/aprobar-secretario" element={<DetalleSolicitud mode="secretario" />} />
           <Route path="tablero" element={<TableroSolicitudes />} />
+
+          {/* Admin dentro del Outlet */}
+          <Route
+            path="admin"
+            element={
+              <AdminRoute>
+                <AdminDashboard />
+              </AdminRoute>
+            }
+          />
         </Route>
 
         {/* Fallback */}

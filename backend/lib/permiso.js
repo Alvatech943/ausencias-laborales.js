@@ -1,26 +1,38 @@
-// lib/permiso.js
+// backend/lib/permiso.js
 const Dependencia = require('../models/Dependencia');
 
-/** Verifica si el usuario es jefe de la dependencia dada */
-async function esJefeDeArea(usuarioId, dependenciaId) {
-  const dep = await Dependencia.findByPk(dependenciaId);
-  if (!dep) return false;
-
-  // Normalizamos a número por si el JWT trae string
-  return Number(dep.jefe_usuario_id) === Number(usuarioId);
+function isUsernameAdmin(username) {
+  const list = (process.env.ADMIN_USERS || '')
+    .split(',')
+    .map(s => s.trim().toLowerCase())
+    .filter(Boolean);
+  return !!username && list.includes(String(username).toLowerCase());
 }
 
-/** Verifica si el usuario es secretario de la secretaría padre */
-async function esSecretarioDeSecretaria(usuarioId, dependenciaId) {
-  const dep = await Dependencia.findByPk(dependenciaId);
-  if (!dep) return false;
+async function inferirRol(userId, username) {
+  if (isUsernameAdmin(username)) return 'admin';
 
-  if (!dep.dependencia_padre_id) return false; // No tiene secretaría padre
+  const secCount  = await Dependencia.count({ where: { secretario_usuario_id: userId } });
+  if (secCount > 0) return 'secretario';
 
-  const secretaria = await Dependencia.findByPk(dep.dependencia_padre_id);
-  if (!secretaria) return false;
+  const jefeCount = await Dependencia.count({ where: { jefe_usuario_id: userId } });
+  if (jefeCount > 0) return 'jefe';
 
-  return Number(secretaria.secretario_usuario_id) === Number(usuarioId);
+  return 'empleado';
 }
 
-module.exports = { esJefeDeArea, esSecretarioDeSecretaria };
+// Helpers que ya usas en solicitudes
+async function esJefeDeArea(userId, dependenciaId) {
+  const area = await Dependencia.findByPk(dependenciaId);
+  if (!area) return false;
+  return area.jefe_usuario_id === userId;
+}
+
+async function esSecretarioDeSecretaria(userId, areaId) {
+  const area = await Dependencia.findByPk(areaId);
+  if (!area || !area.dependencia_padre_id) return false;
+  const sec = await Dependencia.findByPk(area.dependencia_padre_id);
+  return !!sec && sec.secretario_usuario_id === userId;
+}
+
+module.exports = { inferirRol, esJefeDeArea, esSecretarioDeSecretaria, isUsernameAdmin };

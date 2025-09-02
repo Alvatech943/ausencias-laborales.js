@@ -13,6 +13,7 @@ require('./models/Solicitud');
 const authRoutes = require('./routes/auth');
 const solicitudesRoutes = require('./routes/solicitudes');
 const adminRoutes = require('./routes/admin');
+const dependenciasRoutes = require('./routes/dependencias');
 
 const app = express();
 
@@ -28,8 +29,9 @@ app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 app.use('/api/auth', authRoutes);
 app.use('/api/solicitudes', solicitudesRoutes);
 app.use('/api/admin', adminRoutes);
+app.use('/api/dependencias', dependenciasRoutes);
 
-// Ruta de prueba
+// Ruta de prueba 
 app.get('/', (req, res) => {
   res.json({ message: 'API de Ausentismo Laboral funcionando' });
 });

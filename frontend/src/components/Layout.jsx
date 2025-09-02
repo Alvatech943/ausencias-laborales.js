@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { Outlet, useNavigate } from "react-router-dom";
 import { Menu, LogOut, FileText, PlusCircle, BarChart2 } from "lucide-react";
+import { Shield } from "lucide-react";
 
 export default function Layout() {
   const [open, setOpen] = useState(true);
@@ -34,14 +35,15 @@ export default function Layout() {
         </div>
 
         <nav className="p-4 space-y-3">
-          <button
-            onClick={() => navigate("/mis-solicitudes")}
-            className="flex items-center gap-2 w-full text-left rounded-md px-3 py-2 text-sm font-medium text-gray-600 hover:bg-gray-100"
-          >
-            <FileText size={18} />
-            {open && "Mis Solicitudes"}
-          </button>
-
+          {["empleado","jefe", "secretario"].includes(rol) && (
+            <button
+              onClick={() => navigate("/mis-solicitudes")}
+              className="flex items-center gap-2 w-full text-left rounded-md px-3 py-2 text-sm font-medium text-gray-600 hover:bg-gray-100"
+            >
+              <FileText size={18} />
+              {open && "Mis Solicitudes"}
+            </button>
+          )}
           {/* Solo EMPLEADO */}
           {rol === "empleado" && (
             <button
@@ -61,6 +63,15 @@ export default function Layout() {
             >
               <BarChart2 size={18} />
               {open && "Tablero"}
+            </button>
+          )}
+          {rol === "admin" && (
+            <button
+              onClick={() => navigate("/admin")}
+              className="flex items-center gap-2 w-full text-left rounded-md px-3 py-2 text-sm font-medium text-gray-600 hover:bg-gray-100"
+            >
+              {/* icono */}
+              {open && "Administrador"}
             </button>
           )}
         </nav>

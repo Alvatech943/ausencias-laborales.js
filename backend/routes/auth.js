@@ -1,4 +1,4 @@
-// routes/auth.js
+// backend/routes/auth.js
 const express = require('express');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
@@ -6,42 +6,73 @@ const { Op } = require('sequelize');
 
 const Usuario = require('../models/Usuario');
 const Dependencia = require('../models/Dependencia');
-const auth = require('../middleware/auth');  // 👈 añade esto
+const auth = require('../middleware/auth');
+const { inferirRol, isUsernameAdmin } = require('../lib/permiso'); // ← usa SOLO la del helper
 
 const router = express.Router();
 
-/** 👇 Helper: deduce rol desde dependencias */
-async function inferirRol(userId) {
-  // ¿Es secretario de alguna dependencia raíz?
-  const esSecretario = await Dependencia.count({
-    where: { secretario_usuario_id: userId, dependencia_padre_id: null }
-  });
+// LOGIN
+router.post('/login', async (req, res) => {
+  try {
+    const { usuario, password } = req.body;
+    
 
-  if (esSecretario > 0) return 'SECRETARIO';
+    const user = await Usuario.findOne({ where: { usuario } });
+    if (!user) return res.status(400).json({ error: 'Usuario incorrecto' });
 
-  // ¿Es jefe de algún área (hija)?
-  const esJefe = await Dependencia.count({
-    where: { jefe_usuario_id: userId }
-  });
+    if (user.estado === 'inactivo') {
+      return res.status(403).json({ error: 'El usuario está inactivo. Contacta al administrador.' });
+    }
 
-  if (esJefe > 0) return 'JEFE';
+    const ok = await bcrypt.compare(password, user.password);
+    if (!ok) return res.status(400).json({ error: 'contraseña incorrecta' });
 
-  return 'EMPLEADO';
-}
+    // rol desde helper (ya contempla admin si está en ADMIN_USERS)
+    const rol = await inferirRol(user.id, user.usuario);
 
-// POST /api/auth/register  → Crea EMPLEADO
+    const token = jwt.sign(
+      { id: user.id, usuario: user.usuario, dependencia_id: user.dependencia_id, rol },
+      process.env.JWT_SECRET,
+      { expiresIn: '8h' }
+    );
+
+    res.json({
+      message: 'Login exitoso',
+      token,
+      id: user.id,
+      usuario: user.usuario,
+      dependencia_id: user.dependencia_id,
+      rol
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// REGISTER (permite bootstrap de admin)
 router.post('/register', async (req, res) => {
   try {
     const { nombre, usuario, password, cedula, dependencia_id } = req.body;
 
-    if (!nombre || !usuario || !password || !cedula || !dependencia_id) {
-      return res.status(400).json(
-{ error: 'nombre, usuario, password, cedula y dependencia_id son obligatorios' }
-      );
+    const bootstrapAdmin = isUsernameAdmin(usuario);
+
+    // Validaciones mínimas
+    if (!nombre || !usuario || !password || !cedula) {
+      return res.status(400).json({ error: 'nombre, usuario, password y cedula son obligatorios' });
     }
 
-    const dep = await Dependencia.findByPk(Number(dependencia_id));
-    if (!dep) return res.status(400).json({ error: 'dependencia_id no existe' });
+    // Si NO es admin, dependencia_id es obligatoria
+    if (!bootstrapAdmin && !dependencia_id) {
+      return res.status(400).json({ error: 'dependencia_id es obligatoria para no-admin' });
+    }
+
+    // Validar dependencia si viene
+    let depId = null;
+    if (dependencia_id) {
+      const dep = await Dependencia.findByPk(Number(dependencia_id));
+      if (!dep) return res.status(400).json({ error: 'dependencia_id no existe' });
+      depId = Number(dependencia_id);
+    }
 
     // Unicidad
     const yaExiste = await Usuario.findOne({ where: { [Op.or]: [{ usuario }, { cedula }] } });
@@ -54,20 +85,22 @@ router.post('/register', async (req, res) => {
       usuario,
       password: hashed,
       cedula,
-      dependencia_id: Number(dependencia_id)
+      dependencia_id: depId // para admin puede ir null
     });
 
+    // rol desde helper (si el usuario está en ADMIN_USERS será 'admin')
+    const rol = await inferirRol(user.id, user.usuario);
+
     const token = jwt.sign(
-      { id: user.id, usuario: user.usuario, dependencia_id: user.dependencia_id },
+      { id: user.id, usuario: user.usuario, dependencia_id: user.dependencia_id, rol },
       process.env.JWT_SECRET,
       { expiresIn: '8h' }
     );
 
-    // 👇 nuevo: también devolvemos rol inferido (será EMPLEADO tras registrarse)
-    const rol = await inferirRol(user.id);
-
     return res.json({
-      message: 'Empleado registrado correctamente',
+      message: (String(rol).toLowerCase() === 'admin')
+        ? 'Admin registrado correctamente'
+        : 'Empleado registrado correctamente',
       token,
       id: user.id,
       usuario: user.usuario,
@@ -79,55 +112,42 @@ router.post('/register', async (req, res) => {
   }
 });
 
-// POST /api/auth/login
-router.post('/login', async (req, res) => {
-  try {
-    const { usuario, password } = req.body;
-    const user = await Usuario.findOne({ where: { usuario } });
-    if (!user) return res.status(400).json({ error: 'Usuario no encontrado' });
-
-    const ok = await bcrypt.compare(password, user.password);
-    if (!ok) return res.status(400).json({ error: 'Contraseña incorrecta' });
-
-    const token = jwt.sign(
-      { id: user.id, usuario: user.usuario, dependencia_id: user.dependencia_id },
-      process.env.JWT_SECRET,
-      { expiresIn: '8h' }
-    );
-
-    // 👇 nuevo: incluimos rol inferido en la respuesta del login
-    const rol = await inferirRol(user.id);
-
-    return res.json({
-      token,
-      id: user.id,
-      usuario: user.usuario,
-      dependencia_id: user.dependencia_id,
-      rol
-    });
-  } catch (err) {
-    return res.status(500).json({ error: err.message });
-  }
-});
-
-/** 👇 NUEVO: /api/auth/me (requiere token) 
- *  Devuelve usuario + rol actualizado para que el front pueda refrescar estado
- */
+// Perfil del usuario autenticado
 router.get('/me', auth, async (req, res) => {
   try {
-    const user = await Usuario.findByPk(req.user.id);
-    if (!user) return res.status(404).json({ error: 'Usuario no encontrado' });
+    const u = await Usuario.findByPk(req.user.id);
+    if (!u) return res.status(404).json({ error: 'Usuario no encontrado' });
 
-    const rol = await inferirRol(user.id);
+    let secretaria = null;
+    let area = null;
+
+    if (u.dependencia_id) {
+      const dep = await Dependencia.findByPk(u.dependencia_id);
+      if (dep) {
+        if (dep.dependencia_padre_id) {
+          // área hija
+          const secr = await Dependencia.findByPk(dep.dependencia_padre_id);
+          secretaria = secr?.nombre || null;
+          area = dep.nombre;
+        } else {
+          // secretaría raíz
+          secretaria = dep.nombre;
+          area = null;
+        }
+      }
+    }
 
     res.json({
-      id: user.id,
-      usuario: user.usuario,
-      dependencia_id: user.dependencia_id,
-      rol
+      id: u.id,
+      usuario: u.usuario,
+      nombre: u.nombre,
+      cedula: u.cedula,
+      dependencia_id: u.dependencia_id,
+      secretaria,
+      area
     });
   } catch (err) {
-    return res.status(500).json({ error: err.message });
+    res.status(500).json({ error: err.message || 'Error cargando perfil' });
   }
 });
 

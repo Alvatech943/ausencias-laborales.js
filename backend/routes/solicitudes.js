@@ -191,7 +191,7 @@ router.get('/mis-solicitudes', auth, async (req, res) => {
   }
 });
 
-/* =========
+/* =========  
    IMPORTANTE: rutas específicas ANTES de '/:id'
    ========= */
 
@@ -200,6 +200,7 @@ router.get('/board', auth, async (req, res) => {
   try {
     const userId = req.user.id;
 
+    // Áreas visibles por JEFE / SECRETARIO
     const areasJefe = await Dependencia.findAll({ where: { jefe_usuario_id: userId } });
     const secretarias = await Dependencia.findAll({ where: { secretario_usuario_id: userId } });
 
@@ -208,7 +209,6 @@ router.get('/board', auth, async (req, res) => {
     }
 
     const idsAreasJefe = areasJefe.map(a => a.id);
-
     let idsAreasSecretario = [];
     if (secretarias.length > 0) {
       const idsSecretarias = secretarias.map(s => s.id);
@@ -221,27 +221,100 @@ router.get('/board', auth, async (req, res) => {
 
     const areaIds = Array.from(new Set([...idsAreasJefe, ...idsAreasSecretario]));
     if (areaIds.length === 0) {
-      return res.json({ totals: {}, byArea: [], items: [] });
+      return res.json({
+        totals: {},
+        byArea: [],
+        items: [],
+        areas: [],
+        pagination: { page: 1, pages: 1, count: 0, limit: 50 }
+      });
     }
 
-    const items = await Solicitud.findAll({
-      where: { dependencia_id: { [Op.in]: areaIds } },
-      include: [
-        { model: Usuario, as: 'usuario', attributes: ['id', 'usuario', 'nombre', 'cedula'] },
-        { model: Dependencia, as: 'dependencia', attributes: ['id', 'nombre'] },
+    // ------------ Filtros / querystring ------------
+    const {
+      estado,            // "pendiente_jefe,aprobada"
+      areaId,            // id numérico
+      q,                 // texto libre multi-palabra
+      from,              // fecha inicio
+      to,                // fecha fin
+      page = '1',
+      limit = '50',
+      sort = 'fecha',    // solo permitimos algunos campos
+      dir = 'DESC'
+    } = req.query;
+
+    const pageNum = Math.max(parseInt(page, 10) || 1, 1);
+    const pageSize = Math.min(Math.max(parseInt(limit, 10) || 50, 1), 200);
+
+    const whereBase = { dependencia_id: { [Op.in]: areaIds } };
+
+    // Estado(s)
+    if (estado) {
+      const estados = String(estado).split(',').map(s => s.trim()).filter(Boolean);
+      if (estados.length) whereBase.estado = { [Op.in]: estados };
+    }
+
+    // Filtro por área específica
+    if (areaId && !Number.isNaN(Number(areaId))) {
+      whereBase.dependencia_id = Number(areaId);
+    }
+
+    // 🔎 BÚSQUEDA multi-palabra: nombre completo/usuario/cédula/motivo
+    if (q && q.trim()) {
+      const tokens = q.trim().split(/\s+/).filter(Boolean);
+      const andClauses = tokens.map(t => {
+        const like = `%${t}%`;
+        return {
+          [Op.or]: [
+            { nombre_completo:   { [Op.like]: like } },
+            { motivo:            { [Op.like]: like } },
+            { cedula:            { [Op.like]: like } },
+            { '$usuario.nombre$':  { [Op.like]: like } },
+            { '$usuario.usuario$': { [Op.like]: like } },
+          ]
+        };
+      });
+      whereBase[Op.and] = [...(whereBase[Op.and] || []), ...andClauses];
+    }
+
+    // Rango de fechas
+    if (from || to) {
+      const f = from ? new Date(from) : null;
+      const t = to ? new Date(to) : null;
+      if (f && t) whereBase.fecha = { [Op.between]: [f, t] };
+      else if (f) whereBase.fecha = { [Op.gte]: f };
+      else if (t) whereBase.fecha = { [Op.lte]: t };
+    }
+
+    // ------------ Agregados (sobre TODO el match) ------------
+    const agg = await Solicitud.findAll({
+      where: whereBase,
+      attributes: [
+        'estado',
+        'dependencia_id',
+        [sequelize.fn('COUNT', sequelize.col('Solicitud.id')), 'total']
       ],
-      order: [['fecha', 'DESC']],
+      group: ['estado', 'dependencia_id'],
+      include: [
+        { model: Dependencia, as: 'dependencia', attributes: ['id', 'nombre'] },
+        // IMPORTANTE: incluir usuario (aunque sin columnas) para habilitar '$usuario.*$' en where
+        { model: Usuario, as: 'usuario', attributes: [], required: false },
+      ],
     });
 
     const totals = { pendiente_jefe: 0, pendiente_secretario: 0, aprobada: 0, rechazada: 0 };
     const byAreaMap = new Map();
 
-    for (const s of items) {
-      if (totals.hasOwnProperty(s.estado)) totals[s.estado]++;
-      const area = s.dependencia?.nombre || '—';
-      if (!byAreaMap.has(area)) {
-        byAreaMap.set(area, {
-          area,
+    for (const r of agg) {
+      const est = r.get('estado');
+      const tot = parseInt(r.get('total'), 10) || 0;
+      const areaName = r.get('dependencia')?.nombre || '—';
+
+      if (totals.hasOwnProperty(est)) totals[est] += tot;
+
+      if (!byAreaMap.has(areaName)) {
+        byAreaMap.set(areaName, {
+          area: areaName,
           pendiente_jefe: 0,
           pendiente_secretario: 0,
           aprobada: 0,
@@ -249,19 +322,54 @@ router.get('/board', auth, async (req, res) => {
           total: 0,
         });
       }
-      const row = byAreaMap.get(area);
-      if (row.hasOwnProperty(s.estado)) row[s.estado]++;
-      row.total++;
+      const row = byAreaMap.get(areaName);
+      if (row.hasOwnProperty(est)) row[est] += tot;
+      row.total += tot;
     }
-
     const byArea = Array.from(byAreaMap.values()).sort((a, b) => b.total - a.total);
 
-    res.json({ totals, byArea, items });
+    // ------------ Items (paginados) ------------
+    const ALLOWED_SORT = new Set(['fecha', 'id', 'estado']);
+    const sortField = ALLOWED_SORT.has(String(sort)) ? String(sort) : 'fecha';
+    const dirSql = String(dir).toUpperCase() === 'ASC' ? 'ASC' : 'DESC';
+    const order = [[sortField, dirSql]];
+
+    const { rows, count } = await Solicitud.findAndCountAll({
+      where: whereBase,
+      include: [
+        { model: Usuario, as: 'usuario', attributes: ['id', 'usuario', 'nombre', 'cedula'] },
+        { model: Dependencia, as: 'dependencia', attributes: ['id', 'nombre'] },
+      ],
+      order,
+      offset: (pageNum - 1) * pageSize,
+      limit: pageSize
+    });
+
+    // Áreas visibles (para combos)
+    const areasVisibles = await Dependencia.findAll({
+      where: { id: { [Op.in]: areaIds } },
+      attributes: ['id', 'nombre'],
+      order: [['nombre', 'ASC']]
+    });
+
+    res.json({
+      totals,
+      byArea,
+      items: rows,
+      areas: areasVisibles,
+      pagination: {
+        page: pageNum,
+        pages: Math.max(Math.ceil(count / pageSize), 1),
+        count,
+        limit: pageSize
+      }
+    });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: err.message || 'Error construyendo el tablero' });
   }
 });
+
 
 // ---------- Estadísticas simples ----------
 router.get('/estadisticas', auth, async (req, res) => {

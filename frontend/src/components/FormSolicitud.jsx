@@ -7,11 +7,9 @@ export default function FormSolicitud() {
   const [params] = useSearchParams();
   const solicitudId = params.get("id"); // Para jefe/secretario: /solicitud?id=123
 
-  // Rol desde localStorage: "empleado" | "jefe" | "secretario"
   const rol = (localStorage.getItem("rol") || "").toLowerCase();
   const token = localStorage.getItem("token");
 
-  // Opciones de cargo
   const cargoOptions = [
     "Asesores",
     "Profesional",
@@ -38,7 +36,6 @@ export default function FormSolicitud() {
   ];
 
   const [formData, setFormData] = useState({
-    // Empleado (creación)
     nombre_completo: "",
     cedula: "",
     cargo: "",
@@ -59,12 +56,12 @@ export default function FormSolicitud() {
     dia_fin: "",
     firma_solicitante: "",
 
-    // Jefe (aprobación)
+    // Jefe
     obs_jefe: "",
     firma_jefe_inmediato: "",
     nombre_jefe_inmediato: "",
 
-    // Secretario (aprobación)
+    // Secretario
     reviso_si: false,
     reviso_no: false,
     ajusta_ley_si: false,
@@ -74,21 +71,16 @@ export default function FormSolicitud() {
     nombre_secretario: "",
   });
 
-  // Firma (base64) del solicitante para previsualizar y enviar
   const [firmaEmpleado, setFirmaEmpleado] = useState("");
 
-  const [areasDisponibles] = useState([
-    { id: "TIC", nombre: "TIC" },
-    { id: "TALENTO HUMANO", nombre: "TALENTO HUMANO" },
-    { id: "ARCHIVO", nombre: "ARCHIVO" },
-    { id: "ALMACEN", nombre: "ALMACEN" },
-  ]);
+  // Nuevo: saber si el usuario realmente tiene área (hija)
+  const [tieneArea, setTieneArea] = useState(false);
 
   const [loading, setLoading] = useState(true);
   const [titulo, setTitulo] = useState("Formulario de Solicitud");
   const [errorMsg, setErrorMsg] = useState("");
 
-  // ---------- util: archivo -> base64 comprimido ----------
+  // util: archivo -> dataURL comprimida
   const fileToDataURL = (file, { maxW = 600, maxH = 250, quality = 0.85 } = {}) =>
     new Promise((resolve, reject) => {
       const reader = new FileReader();
@@ -108,14 +100,11 @@ export default function FormSolicitud() {
           ctx.drawImage(img, 0, 0, width, height);
 
           const dataURL = canvas.toDataURL("image/jpeg", quality);
-
-          // Comprobación aproximada de tamaño
           const base = "data:image/jpeg;base64,";
           const approxBytes = Math.ceil((dataURL.length - base.length) * 3 / 4);
           if (approxBytes > 1.5 * 1024 * 1024) {
             return reject(new Error("La firma es muy grande (>1.5MB). Usa una imagen más pequeña."));
           }
-
           resolve(dataURL);
         };
         img.onerror = reject;
@@ -142,7 +131,7 @@ export default function FormSolicitud() {
     }
   };
 
-  // ---------- CARGA INICIAL (solo para jefe/secretario; empleado diligencia manual) ----------
+  // Carga inicial
   useEffect(() => {
     (async () => {
       try {
@@ -154,6 +143,23 @@ export default function FormSolicitud() {
 
         if (rol === "empleado") {
           setTitulo("Nueva solicitud");
+
+          // Traer datos del usuario actual
+          const meRes = await axios.get("http://localhost:4000/api/auth/me", {
+            headers: { Authorization: `Bearer ${token}` },
+          });
+          const me = meRes.data || {};
+
+          setTieneArea(!!me.area);
+
+          setFormData((prev) => ({
+            ...prev,
+            nombre_completo: me.nombre || "",
+            cedula: me.cedula || "",
+            // cargo queda libre (lo diligencia el empleado)
+            secretaria_oficina: me.secretaria || "",
+            area_trabajo: me.area || "",
+          }));
         }
 
         if (rol === "jefe") {
@@ -207,7 +213,7 @@ export default function FormSolicitud() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rol, solicitudId]);
 
-  // ---------- AUTO-CÁLCULOS ----------
+  // Auto-cálculos
   useEffect(() => {
     if (formData.dia_inicio && formData.dia_fin) {
       const inicio = new Date(formData.dia_inicio);
@@ -226,13 +232,11 @@ export default function FormSolicitud() {
     }
   }, [formData.hora_inicio, formData.hora_fin]);
 
-  // ---------- HANDLERS ----------
   const handleChange = (e) => {
     const { name, type, value, checked } = e.target;
     setFormData((prev) => ({ ...prev, [name]: type === "checkbox" ? checked : value }));
   };
 
-  // Exclusividad de checkboxes (motivos, reviso, ajusta_ley)
   const handleExclusive = (group, key) => {
     setFormData((prev) => {
       const next = { ...prev };
@@ -264,16 +268,16 @@ export default function FormSolicitud() {
 
   // Validaciones mínimas
   const canSubmit = useMemo(() => {
-    if (rol !== "empleado") return true; // jefe/secretario no envían desde aquí
-    if (!formData.nombre_completo || !formData.cedula || !formData.cargo || !formData.area_trabajo) return false;
+    if (rol !== "empleado") return true;
+    if (!formData.nombre_completo || !formData.cedula || !formData.cargo) return false;
+    // Área obligatoria solo si el usuario realmente tiene área
+    if (tieneArea && !formData.area_trabajo) return false;
     if (!firmaEmpleado) return false;
-    // Al menos un motivo
     const hasMotivo = ["estudios", "cita_medica", "licencia", "compensatorio", "otro"].some((k) => formData[k]);
     if (!hasMotivo) return false;
     return true;
-  }, [rol, formData, firmaEmpleado]);
+  }, [rol, formData, firmaEmpleado, tieneArea]);
 
-  // Enviar: crea (empleado) o aprueba (jefe/secretario)
   const handleSubmit = async (e) => {
     e.preventDefault();
     try {
@@ -291,7 +295,7 @@ export default function FormSolicitud() {
 
         const payload = {
           ...formData,
-          firma_solicitante: firmaEmpleado, // <-- importante
+          firma_solicitante: firmaEmpleado,
           numero_horas: formData.numero_horas ? parseInt(formData.numero_horas) : null,
           numero_dias: formData.numero_dias ? parseInt(formData.numero_dias) : null,
         };
@@ -310,7 +314,7 @@ export default function FormSolicitud() {
           return;
         }
         const payload = {
-          aprobadoJefe: true, // o false si haces botón de rechazo
+          aprobadoJefe: true,
           observaciones: formData.obs_jefe || null,
         };
         await axios.put(
@@ -329,7 +333,7 @@ export default function FormSolicitud() {
           return;
         }
         const payload = {
-          aprobado: true, // o false
+          aprobado: true,
           seAjustaALaLey: formData.ajusta_ley_si === true,
           observaciones: formData.obs_secretario || null,
         };
@@ -352,7 +356,6 @@ export default function FormSolicitud() {
     return <div className="flex justify-center mt-10 text-gray-600">Cargando…</div>;
   }
 
-  // UI Helpers
   const Badge = ({ children }) => (
     <span className="inline-flex items-center gap-2 px-3 py-1 rounded-full text-xs font-medium bg-gray-100 text-gray-700 border border-gray-200">
       {children}
@@ -365,7 +368,7 @@ export default function FormSolicitud() {
   return (
     <div className="min-h-screen bg-gradient-to-b from-gray-50 to-white pb-24">
       <div className="max-w-4xl mx-auto px-4 pt-8">
-        {/* Header Card */}
+        {/* Header */}
         <div className="mb-6 bg-white border rounded-2xl shadow-sm p-5 flex items-center justify-between">
           <div>
             <h1 className="text-2xl font-bold text-gray-800">{titulo}</h1>
@@ -379,12 +382,9 @@ export default function FormSolicitud() {
           </div>
         </div>
 
-        {/* Form Card */}
-        <form
-          onSubmit={handleSubmit}
-          className="bg-white border rounded-2xl shadow-sm p-6 space-y-8"
-        >
-          {/* Sección: Datos del solicitante */}
+        {/* Form */}
+        <form onSubmit={handleSubmit} className="bg-white border rounded-2xl shadow-sm p-6 space-y-8">
+          {/* Datos del solicitante */}
           <Section title="Datos del solicitante" subtitle="Información básica del empleado.">
             <div className="grid md:grid-cols-2 gap-4">
               <LabeledInput
@@ -393,6 +393,7 @@ export default function FormSolicitud() {
                 value={formData.nombre_completo}
                 onChange={handleChange}
                 required
+                readOnly={rol === "empleado"}
               />
               <LabeledInput
                 label="Cédula"
@@ -400,7 +401,28 @@ export default function FormSolicitud() {
                 value={formData.cedula}
                 onChange={handleChange}
                 required
+                readOnly={rol === "empleado"}
               />
+
+              <LabeledInput
+                label="Secretaría / Oficina"
+                name="secretaria_oficina"
+                value={formData.secretaria_oficina}
+                onChange={handleChange}
+                readOnly={rol === "empleado"}
+              />
+
+              <LabeledInput
+                label="Área de trabajo"
+                name="area_trabajo"
+                value={formData.area_trabajo}
+                onChange={handleChange}
+                // Requerido solo si el usuario realmente tiene área
+                required={rol === "empleado" ? tieneArea : false}
+                readOnly={rol === "empleado"}
+                placeholder={tieneArea ? "" : "No aplica (sin áreas)"}
+              />
+
               <LabeledSelect
                 label="Cargo"
                 name="cargo"
@@ -409,24 +431,10 @@ export default function FormSolicitud() {
                 required
                 options={cargoOptions}
               />
-              <LabeledInput
-                label="Secretaría / Oficina"
-                name="secretaria_oficina"
-                value={formData.secretaria_oficina}
-                onChange={handleChange}
-              />
-              <LabeledSelect
-                label="Área de trabajo"
-                name="area_trabajo"
-                value={formData.area_trabajo}
-                onChange={handleChange}
-                required
-                options={areasDisponibles.map((a) => a.nombre || a.id)}
-              />
             </div>
           </Section>
 
-          {/* Sección: Motivo */}
+          {/* Motivo */}
           <Section title="Motivo" subtitle="Selecciona un motivo (solo uno) y describe la solicitud.">
             <div className="flex flex-wrap gap-2">
               {motivoChips.map((m) => {
@@ -466,40 +474,16 @@ export default function FormSolicitud() {
             </div>
           </Section>
 
-          {/* Sección: Tiempo */}
+          {/* Tiempo */}
           <Section
             title="Tiempo"
             subtitle="Indica días o, si aplica, horas específicas (si llenas horas no es necesario llenar días)."
           >
             <div className="grid md:grid-cols-2 gap-4">
-              <LabeledInput
-                type="date"
-                label="Día de inicio"
-                name="dia_inicio"
-                value={formData.dia_inicio}
-                onChange={handleChange}
-              />
-              <LabeledInput
-                type="date"
-                label="Día de fin"
-                name="dia_fin"
-                value={formData.dia_fin}
-                onChange={handleChange}
-              />
-              <LabeledInput
-                type="time"
-                label="Hora inicio"
-                name="hora_inicio"
-                value={formData.hora_inicio}
-                onChange={handleChange}
-              />
-              <LabeledInput
-                type="time"
-                label="Hora fin"
-                name="hora_fin"
-                value={formData.hora_fin}
-                onChange={handleChange}
-              />
+              <LabeledInput type="date" label="Día de inicio" name="dia_inicio" value={formData.dia_inicio} onChange={handleChange} />
+              <LabeledInput type="date" label="Día de fin" name="dia_fin" value={formData.dia_fin} onChange={handleChange} />
+              <LabeledInput type="time" label="Hora inicio" name="hora_inicio" value={formData.hora_inicio} onChange={handleChange} />
+              <LabeledInput type="time" label="Hora fin" name="hora_fin" value={formData.hora_fin} onChange={handleChange} />
             </div>
 
             <div className="mt-3 flex items-center gap-3">
@@ -508,11 +492,8 @@ export default function FormSolicitud() {
             </div>
           </Section>
 
-          {/* Sección: Firma */}
-          <Section
-            title="Firma del solicitante"
-            subtitle="Adjunta una imagen de tu firma (JPG o PNG)."
-          >
+          {/* Firma */}
+          <Section title="Firma del solicitante" subtitle="Adjunta una imagen de tu firma (JPG o PNG).">
             <div className="grid md:grid-cols-2 gap-6 items-start">
               <div>
                 <label
@@ -521,29 +502,15 @@ export default function FormSolicitud() {
                 >
                   <div className="font-medium mb-1">Subir imagen</div>
                   <div className="text-xs text-gray-400">Máx. 1.5 MB (se comprime automáticamente)</div>
-                  <input
-                    id="firma-upload"
-                    type="file"
-                    accept="image/*"
-                    className="hidden"
-                    onChange={handleFirmaEmpleadoChange}
-                  />
+                  <input id="firma-upload" type="file" accept="image/*" className="hidden" onChange={handleFirmaEmpleadoChange} />
                 </label>
-                {!firmaEmpleado && (
-                  <p className="mt-2 text-xs text-gray-500">
-                    * Obligatorio para enviar la solicitud.
-                  </p>
-                )}
+                {!firmaEmpleado && <p className="mt-2 text-xs text-gray-500">* Obligatorio para enviar la solicitud.</p>}
               </div>
 
               {firmaEmpleado && (
                 <div className="bg-white border rounded-xl p-3">
                   <p className="text-xs text-gray-500 mb-2">Vista previa</p>
-                  <img
-                    src={firmaEmpleado}
-                    alt="Firma del solicitante (previa)"
-                    className="h-24 object-contain"
-                  />
+                  <img src={firmaEmpleado} alt="Firma del solicitante (previa)" className="h-24 object-contain" />
                   <button
                     type="button"
                     onClick={() => {
@@ -559,26 +526,19 @@ export default function FormSolicitud() {
             </div>
           </Section>
 
-          {/* Errores */}
           {errorMsg && (
             <div className="rounded-lg border border-red-200 bg-red-50 text-red-700 text-sm p-3">
               {errorMsg}
             </div>
           )}
 
-          {/* Sticky Footer Actions */}
+          {/* Sticky Footer */}
           <div className="h-4" />
           <div className="fixed left-0 right-0 bottom-0 bg-white/80 backdrop-blur border-t">
             <div className="max-w-4xl mx-auto px-4 py-3 flex items-center justify-between">
-              <div className="text-xs text-gray-500">
-                Revisa que los datos sean correctos antes de enviar.
-              </div>
+              <div className="text-xs text-gray-500">Revisa que los datos sean correctos antes de enviar.</div>
               <div className="flex gap-2">
-                <button
-                  type="button"
-                  onClick={() => navigate(-1)}
-                  className="px-4 py-2 rounded-lg border text-gray-700 hover:bg-gray-50"
-                >
+                <button type="button" onClick={() => navigate(-1)} className="px-4 py-2 rounded-lg border text-gray-700 hover:bg-gray-50">
                   Cancelar
                 </button>
                 <button
@@ -586,9 +546,7 @@ export default function FormSolicitud() {
                   disabled={rol === "empleado" && !canSubmit}
                   className={[
                     "px-4 py-2 rounded-lg text-white",
-                    rol === "empleado" && !canSubmit
-                      ? "bg-gray-300 cursor-not-allowed"
-                      : "bg-blue-600 hover:bg-blue-700",
+                    rol === "empleado" && !canSubmit ? "bg-gray-300 cursor-not-allowed" : "bg-blue-600 hover:bg-blue-700",
                   ].join(" ")}
                 >
                   {rol === "empleado" ? "Enviar solicitud" : "Guardar"}
@@ -618,17 +576,24 @@ function Section({ title, subtitle, children }) {
   );
 }
 
-function LabeledInput({ label, name, value, onChange, type = "text", required = false }) {
+function LabeledInput({ label, name, value, onChange, type = "text", required = false, readOnly = false, placeholder = "" }) {
   return (
     <label className="block text-sm">
-      <span className="text-gray-700">{label}{required && " *"}</span>
+      <span className="text-gray-700">
+        {label}
+        {required && " *"}
+      </span>
       <input
         type={type}
         name={name}
         value={value}
         onChange={onChange}
         required={required}
-        className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 text-gray-800 focus:outline-none focus:ring-2 focus:ring-blue-200 focus:border-blue-400"
+        readOnly={readOnly}
+        placeholder={placeholder}
+        className={`mt-1 w-full rounded-lg border px-3 py-2 text-gray-800 bg-white focus:outline-none focus:ring-2 focus:ring-blue-200 focus:border-blue-400 ${
+          readOnly ? "bg-gray-50" : "border-gray-300"
+        }`}
       />
     </label>
   );
@@ -637,7 +602,10 @@ function LabeledInput({ label, name, value, onChange, type = "text", required = 
 function LabeledSelect({ label, name, value, onChange, options = [], required = false }) {
   return (
     <label className="block text-sm">
-      <span className="text-gray-700">{label}{required && " *"}</span>
+      <span className="text-gray-700">
+        {label}
+        {required && " *"}
+      </span>
       <select
         name={name}
         value={value}
@@ -647,7 +615,9 @@ function LabeledSelect({ label, name, value, onChange, options = [], required = 
       >
         <option value="">Selecciona…</option>
         {options.map((opt) => (
-          <option key={opt} value={opt}>{opt}</option>
+          <option key={opt} value={opt}>
+            {opt}
+          </option>
         ))}
       </select>
     </label>
