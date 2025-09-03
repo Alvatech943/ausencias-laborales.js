@@ -56,7 +56,7 @@ export default function Layout() {
           )}
 
           {/* Solo JEFE o SECRETARIO */}
-          {["jefe", "secretario"].includes(rol) && (
+          {["jefe", "secretario", "admin"].includes(rol) && (
             <button
               onClick={() => navigate("/tablero")}
               className="flex items-center gap-2 w-full text-left rounded-md px-3 py-2 text-sm font-medium text-gray-600 hover:bg-gray-100"

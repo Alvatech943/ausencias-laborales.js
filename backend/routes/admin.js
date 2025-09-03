@@ -1,35 +1,14 @@
 // routes/admin.js
 const router = require('express').Router();
-const { Op } = require('sequelize');
+const { Op, fn, col } = require('sequelize'); // 👈 importa fn/col también
 const auth = require('../middleware/auth');
 const isAdmin = require('../middleware/isAdmin');
 const Usuario = require('../models/Usuario');
 const Dependencia = require('../models/Dependencia');
 
-router.get('/usuarios', auth, isAdmin, async (req, res) => {
-  try {
-    const { q = "" } = req.query;
-    if (!q.trim()) return res.json([]);
-
-    const { Op } = require('sequelize');
-    const rows = await Usuario.findAll({
-      where: {
-        [Op.or]: [
-          { nombre:   { [Op.like]: `%${q}%` } },
-          { usuario:  { [Op.like]: `%${q}%` } },
-          { cedula:   { [Op.like]: `%${q}%` } },
-        ]
-      },
-      attributes: ['id', 'usuario', 'nombre', 'cedula', 'dependencia_id'],
-      limit: 20,
-      order: [['nombre', 'ASC']]
-    });
-
-    res.json(rows);
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
+/* ==========================
+ *  DEPENDENCIAS: ASIGNACIONES
+ * ========================== */
 
 // Asignar JEFE a un área (área hija: tiene dependencia_padre_id)
 router.put('/areas/:areaId/jefe', auth, isAdmin, async (req, res) => {
@@ -49,7 +28,11 @@ router.put('/areas/:areaId/jefe', auth, isAdmin, async (req, res) => {
     if (!user) return res.status(404).json({ error: 'Usuario no encontrado' });
 
     await area.update({ jefe_usuario_id: user.id });
-    return res.json({ message: 'Jefe asignado', area: { id: area.id, nombre: area.nombre }, jefe: { id: user.id, usuario: user.usuario } });
+    return res.json({
+      message: 'Jefe asignado',
+      area: { id: area.id, nombre: area.nombre },
+      jefe: { id: user.id, usuario: user.usuario }
+    });
   } catch (e) {
     return res.status(500).json({ error: e.message });
   }
@@ -73,13 +56,21 @@ router.put('/secretarias/:secretariaId/secretario', auth, isAdmin, async (req, r
     if (!user) return res.status(404).json({ error: 'Usuario no encontrado' });
 
     await sec.update({ secretario_usuario_id: user.id });
-    return res.json({ message: 'Secretario asignado', secretaria: { id: sec.id, nombre: sec.nombre }, secretario: { id: user.id, usuario: user.usuario } });
+    return res.json({
+      message: 'Secretario asignado',
+      secretaria: { id: sec.id, nombre: sec.nombre },
+      secretario: { id: user.id, usuario: user.usuario }
+    });
   } catch (e) {
     return res.status(500).json({ error: e.message });
   }
 });
 
-router.post('/dependencias', auth, isAdmin, async (req,res)=>{
+/* ==========================
+ *  DEPENDENCIAS: CRUD BÁSICO
+ * ========================== */
+
+router.post('/dependencias', auth, isAdmin, async (req, res) => {
   try {
     const { nombre, dependencia_padre_id, estado = 'activa' } = req.body;
     if (!nombre?.trim()) return res.status(400).json({ error:'nombre es obligatorio' });
@@ -89,8 +80,6 @@ router.post('/dependencias', auth, isAdmin, async (req,res)=>{
     if (dependencia_padre_id) {
       const padre = await Dependencia.findByPk(Number(dependencia_padre_id));
       if (!padre) return res.status(400).json({ error:'dependencia_padre_id no existe' });
-      // (opcional) restringir a 2 niveles: solo hijas de raíz
-      // if (padre.dependencia_padre_id) return res.status(400).json({ error: 'Solo se permite 2 niveles (padre debe ser raíz)' });
       padreId = padre.id;
     }
 
@@ -106,8 +95,7 @@ router.post('/dependencias', auth, isAdmin, async (req,res)=>{
   }
 });
 
-/* ====== ACTUALIZAR DEPENDENCIA ====== */
-router.put('/dependencias/:id', auth, isAdmin, async (req,res)=>{
+router.put('/dependencias/:id', auth, isAdmin, async (req, res) => {
   try {
     const { id } = req.params;
     const { nombre, estado, dependencia_padre_id } = req.body;
@@ -131,20 +119,21 @@ router.put('/dependencias/:id', auth, isAdmin, async (req,res)=>{
     }
 
     await dep.update(data);
-    res.json({ message:'Dependencia actualizada', dependencia: dep });
+    res.json({ message:'Dependencia actualizado', dependencia: dep });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
 });
 
-/* ====== CAMBIAR ESTADO DEPENDENCIA ====== */
-router.patch('/dependencias/:id/estado', auth, isAdmin, async (req,res)=>{
+router.patch('/dependencias/:id/estado', auth, isAdmin, async (req, res) => {
   try {
     const { id } = req.params;
     const { estado } = req.body;
     if (!['activa','inactiva'].includes(estado)) return res.status(400).json({ error:'estado inválido' });
+
     const dep = await Dependencia.findByPk(Number(id));
     if (!dep) return res.status(404).json({ error:'Dependencia no encontrada' });
+
     await dep.update({ estado });
     res.json({ message:`Dependencia ${estado}`, dependencia: dep });
   } catch (e) {
@@ -152,20 +141,144 @@ router.patch('/dependencias/:id/estado', auth, isAdmin, async (req,res)=>{
   }
 });
 
-/* ====== CAMBIAR ESTADO USUARIO ====== */
-router.patch('/usuarios/:id/estado', auth, isAdmin, async (req,res)=>{
+/* ==========================
+ *  USUARIOS (ADMIN)
+ * ========================== */
+
+// 🔎 Búsqueda rápida (para autocompletar, etc.)
+router.get('/usuarios/search', auth, isAdmin, async (req, res) => {
   try {
-    const { id } = req.params;
-    const { estado } = req.body;
-    if (!['activo','inactivo'].includes(estado)) return res.status(400).json({ error:'estado inválido' });
-    const u = await Usuario.findByPk(Number(id));
-    if (!u) return res.status(404).json({ error:'Usuario no encontrado' });
-    await u.update({ estado });
-    res.json({ message:`Usuario ${estado}`, usuario: { id: u.id, usuario: u.usuario, estado: u.estado }});
+    const { q = "" } = req.query;
+    if (!q.trim()) return res.json([]);
+    const rows = await Usuario.findAll({
+      where: {
+        [Op.or]: [
+          { nombre:  { [Op.like]: `%${q}%` } },
+          { usuario: { [Op.like]: `%${q}%` } },
+          { cedula:  { [Op.like]: `%${q}%` } },
+        ]
+      },
+      attributes: ['id', 'usuario', 'nombre', 'cedula', 'dependencia_id'],
+      limit: 20,
+      order: [['nombre', 'ASC']]
+    });
+    res.json(rows);
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
 });
 
+// 📋 Listado completo con rol deducido
+router.get('/usuarios', auth, isAdmin, async (req, res) => {
+  try {
+    const usuarios = await Usuario.findAll({
+      attributes: ['id', 'usuario', 'nombre', 'cedula', 'dependencia_id', 'estado'],
+      include: [{ model: Dependencia, as: 'dependencia', attributes: ['id','nombre','dependencia_padre_id'] }],
+      order: [['nombre','ASC']]
+    });
+
+    const jefes = await Dependencia.findAll({
+      attributes: ['jefe_usuario_id', [fn('COUNT', col('id')), 'n']],
+      where: { jefe_usuario_id: { [Op.ne]: null } },
+      group: ['jefe_usuario_id'],
+      raw: true
+    });
+    const secretarios = await Dependencia.findAll({
+      attributes: ['secretario_usuario_id', [fn('COUNT', col('id')), 'n']],
+      where: { secretario_usuario_id: { [Op.ne]: null } },
+      group: ['secretario_usuario_id'],
+      raw: true
+    });
+
+    const mapJ = Object.fromEntries(jefes.map(r => [r.jefe_usuario_id, Number(r.n)]));
+    const mapS = Object.fromEntries(secretarios.map(r => [r.secretario_usuario_id, Number(r.n)]));
+
+    const out = usuarios.map(u => {
+      const isJ = !!mapJ[u.id];
+      const isS = !!mapS[u.id];
+      let rol = 'EMPLEADO';
+      if (isJ && isS) rol = 'SECRETARIO+JEFE';
+      else if (isS) rol = 'SECRETARIO';
+      else if (isJ) rol = 'JEFE';
+      return {
+        id: u.id,
+        usuario: u.usuario,
+        nombre: u.nombre,
+        cedula: u.cedula,
+        estado: u.estado || 'activo',
+        dependencia: u.dependencia ? {
+          id: u.dependencia.id,
+          nombre: u.dependencia.nombre,
+          dependencia_padre_id: u.dependencia.dependencia_padre_id
+        } : null,
+        rol
+      };
+    });
+
+    res.json(out);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Cambiar estado de un usuario (activo/inactivo)
+router.patch('/usuarios/:id/estado', auth, isAdmin, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { estado } = req.body; // 'activo' | 'inactivo'
+    if (!['activo','inactivo'].includes(String(estado))) {
+      return res.status(400).json({ error: 'estado inválido' });
+    }
+    const u = await Usuario.findByPk(Number(id));
+    if (!u) return res.status(404).json({ error: 'Usuario no encontrado' });
+
+    u.estado = estado;
+    await u.save();
+    res.json({ message: 'Estado actualizado', id: u.id, estado: u.estado });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Remover TODAS las jefaturas de un usuario
+router.post('/usuarios/:id/remover-jefaturas', auth, isAdmin, async (req, res) => {
+  try {
+    const { id } = req.params;
+    await Dependencia.update(
+      { jefe_usuario_id: null },
+      { where: { jefe_usuario_id: Number(id) } }
+    );
+    res.json({ message: 'Jefaturas removidas' });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Remover TODAS las secretarías de un usuario (secretario)
+router.post('/usuarios/:id/remover-secretarias', auth, isAdmin, async (req, res) => {
+  try {
+    const { id } = req.params;
+    await Dependencia.update(
+      { secretario_usuario_id: null },
+      { where: { secretario_usuario_id: Number(id) } }
+    );
+    res.json({ message: 'Secretarías removidas' });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Datos básicos (para mostrar nombre por id)
+router.get('/usuarios/:id', auth, isAdmin, async (req, res) => {
+  try {
+    const u = await Usuario.findByPk(Number(req.params.id), {
+      attributes: ['id','usuario','nombre']
+    });
+    if (!u) return res.status(404).json({ error: 'Usuario no encontrado' });
+    res.json(u);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
 
 module.exports = router;

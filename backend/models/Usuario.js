@@ -17,6 +17,7 @@ const Usuario = sequelize.define("Usuario", {
   timestamps: false,
 });
 
-
+const Dependencia = require('./Dependencia');
+Usuario.belongsTo(Dependencia, { as: 'dependencia', foreignKey: 'dependencia_id' });
 
 module.exports = Usuario;
