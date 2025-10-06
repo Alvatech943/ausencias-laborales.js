@@ -58,19 +58,19 @@ router.post('/register', async (req, res) => {
 
     // Validaciones mínimas
     if (!nombre || !usuario || !password || !cedula) {
-      return res.status(400).json({ error: 'nombre, usuario, password y cedula son obligatorios' });
+      return res.status(400).json({ error: 'nombre, usuario, contraseña y cedula son obligatorios' });
     }
 
     // Si NO es admin, dependencia_id es obligatoria
     if (!bootstrapAdmin && !dependencia_id) {
-      return res.status(400).json({ error: 'dependencia_id es obligatoria para no-admin' });
+      return res.status(400).json({ error: 'La dependencia es obligatoria' });
     }
 
     // Validar dependencia si viene
     let depId = null;
     if (dependencia_id) {
       const dep = await Dependencia.findByPk(Number(dependencia_id));
-      if (!dep) return res.status(400).json({ error: 'dependencia_id no existe' });
+      if (!dep) return res.status(400).json({ error: 'la dependencia no existe' });
       depId = Number(dependencia_id);
     }
 

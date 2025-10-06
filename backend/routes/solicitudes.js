@@ -200,53 +200,223 @@ router.get('/board', auth, async (req, res) => {
   try {
     const userId = req.user.id;
 
-    // Áreas visibles por JEFE / SECRETARIO
-    const areasJefe = await Dependencia.findAll({ where: { jefe_usuario_id: userId } });
-    const secretarias = await Dependencia.findAll({ where: { secretario_usuario_id: userId } });
+    // --------- ADMIN por variable de entorno ----------
+    const adminList = (process.env.ADMIN_USERS || '')
+      .split(',')
+      .map(s => s.trim().toLowerCase())
+      .filter(Boolean);
+    const isAdminUser = adminList.includes((req.user?.usuario || '').toLowerCase());
 
-    if (areasJefe.length === 0 && secretarias.length === 0) {
-      return res.status(403).json({ error: 'Solo Jefe o Secretario pueden ver el tablero' });
-    }
-
-    const idsAreasJefe = areasJefe.map(a => a.id);
-    let idsAreasSecretario = [];
-    if (secretarias.length > 0) {
-      const idsSecretarias = secretarias.map(s => s.id);
-      const areasHijas = await Dependencia.findAll({
-        where: { dependencia_padre_id: { [Op.in]: idsSecretarias } },
-        attributes: ['id']
-      });
-      idsAreasSecretario = areasHijas.map(a => a.id);
-    }
-
-    const areaIds = Array.from(new Set([...idsAreasJefe, ...idsAreasSecretario]));
-    if (areaIds.length === 0) {
-      return res.json({
-        totals: {},
-        byArea: [],
-        items: [],
-        areas: [],
-        pagination: { page: 1, pages: 1, count: 0, limit: 50 }
-      });
-    }
-
-    // ------------ Filtros / querystring ------------
+    // --------- Query params ----------
     const {
-      estado,            // "pendiente_jefe,aprobada"
-      areaId,            // id numérico
-      q,                 // texto libre multi-palabra
-      from,              // fecha inicio
-      to,                // fecha fin
+      estado,            // csv: "pendiente_jefe,aprobada"
+      q,                 // texto libre
+      from,              // YYYY-MM-DD
+      to,                // YYYY-MM-DD
+      secretariaId,      // id numérico (dependencia raíz)
+      areaId,            // id numérico (dependencia hija)
       page = '1',
       limit = '50',
-      sort = 'fecha',    // solo permitimos algunos campos
+      sort = 'fecha',    // 'fecha' | 'id' | 'estado'
       dir = 'DESC'
     } = req.query;
 
     const pageNum = Math.max(parseInt(page, 10) || 1, 1);
     const pageSize = Math.min(Math.max(parseInt(limit, 10) || 50, 1), 200);
 
-    const whereBase = { dependencia_id: { [Op.in]: areaIds } };
+    // --------- Visibilidad de secretarías y áreas por rol ----------
+    // Secretarías visibles:
+    // - ADMIN: todas las dependencias raíz (sin dependencia_padre_id)
+    // - SECRETARIO: donde es secretario
+    // - JEFE: las secretarías "padre" de sus áreas
+    let secretariasVisibles = [];
+    if (isAdminUser) {
+      secretariasVisibles = await Dependencia.findAll({
+        where: { dependencia_padre_id: null },
+        attributes: ['id', 'nombre'],
+        order: [['nombre', 'ASC']]
+      });
+    } else {
+      // SECRETARÍAS donde el usuario es secretario
+      const secretariasPropias = await Dependencia.findAll({
+        where: { secretario_usuario_id: userId, dependencia_padre_id: null },
+        attributes: ['id', 'nombre']
+      });
+
+      // ÁREAS donde el usuario es jefe → obtener su secretaria padre
+      const areasJefe = await Dependencia.findAll({
+        where: { jefe_usuario_id: userId, dependencia_padre_id: { [Op.ne]: null } },
+        attributes: ['id', 'dependencia_padre_id']
+      });
+
+      let padresIds = [];
+      if (areasJefe.length > 0) {
+        const padreIds = Array.from(new Set(areasJefe.map(a => a.dependencia_padre_id)));
+        const padres = await Dependencia.findAll({
+          where: { id: { [Op.in]: padreIds }, dependencia_padre_id: null },
+          attributes: ['id', 'nombre']
+        });
+        padresIds = padres.map(p => p.id);
+        // merge secretarías (secretario + padres de jefaturas)
+        const mapSec = new Map();
+        for (const s of [...secretariasPropias, ...padres]) mapSec.set(s.id, s);
+        secretariasVisibles = Array.from(mapSec.values()).sort((a, b) => a.nombre.localeCompare(b.nombre));
+      } else {
+        secretariasVisibles = secretariasPropias.sort((a, b) => a.nombre.localeCompare(b.nombre));
+      }
+    }
+
+    // Áreas visibles según secretariaId:
+    // - Si NO hay secretariaId => por UI pedida, no listamos áreas ([])
+    // - Si hay secretariaId:
+    //   - ADMIN: todas las hijas de esa secretaría
+    //   - SECRETARIO: todas las hijas de sus secretarías, pero si pidió secretariaId, solo de esa
+    //   - JEFE: intersección entre sus áreas y las hijas de esa secretaría
+    let areasVisibles = [];
+    let areaIdsAutorizados = []; // ids de áreas para filtrar datos si aplica
+
+    // Utilidad: obtener hijas de una secretaría
+    async function getAreasHijas(secId) {
+      const rows = await Dependencia.findAll({
+        where: { dependencia_padre_id: Number(secId) },
+        attributes: ['id', 'nombre'],
+        order: [['nombre', 'ASC']]
+      });
+      return rows;
+    }
+
+    if (secretariaId && !Number.isNaN(Number(secretariaId))) {
+      const secIdNum = Number(secretariaId);
+
+      if (isAdminUser) {
+        // ADMIN: todas las hijas de esa secretaría
+        const hijas = await getAreasHijas(secIdNum);
+        areasVisibles = hijas;
+        areaIdsAutorizados = hijas.map(a => a.id);
+      } else {
+        // No admin:
+        // 1) Secretarías del usuario (secretario + padres de áreas jefe)
+        const misSecretariasIds = new Set(secretariasVisibles.map(s => s.id));
+        const esMiSecretaria = misSecretariasIds.has(secIdNum);
+
+        if (!esMiSecretaria) {
+          // No tiene acceso a esta secretaría
+          areasVisibles = [];
+          areaIdsAutorizados = []; // filtrará a vacío si se usa
+        } else {
+          const hijas = await getAreasHijas(secIdNum);
+
+          // Si es SECRETARIO de esta, tiene todas sus áreas hijas:
+          const soySecretarioDeEsta = !isAdminUser && (
+            await Dependencia.count({
+              where: { id: secIdNum, secretario_usuario_id: userId, dependencia_padre_id: null }
+            })
+          ) > 0;
+
+          if (soySecretarioDeEsta) {
+            areasVisibles = hijas;
+            areaIdsAutorizados = hijas.map(a => a.id);
+          } else {
+            // JEFE: intersección entre sus áreas (como jefe) y las hijas de esta secretaría
+            const misAreasJefe = await Dependencia.findAll({
+              where: { jefe_usuario_id: userId, dependencia_padre_id: { [Op.ne]: null } },
+              attributes: ['id', 'dependencia_padre_id']
+            });
+            const misAreasJefeSet = new Set(misAreasJefe.map(a => a.id));
+            const hijasFiltradas = hijas.filter(h => misAreasJefeSet.has(h.id));
+            areasVisibles = hijasFiltradas;
+            areaIdsAutorizados = hijasFiltradas.map(a => a.id);
+          }
+        }
+      }
+    } else {
+      // Sin secretariaId: por UI pedida, no devolvemos áreas
+      areasVisibles = [];
+      areaIdsAutorizados = []; // se decidirá abajo cómo filtrar datos
+    }
+
+    // --------- whereBase (filtro de datos) ----------
+    const whereBase = {};
+
+    // Si NO hay secretariaId ni areaId:
+    //  - ADMIN: ve todo (todas las áreas hijas de todas las secretarías)
+    //  - SECRETARIO: todas las áreas hijas de sus secretarías
+    //  - JEFE: solo sus áreas
+    if (!secretariaId && !areaId) {
+      if (!isAdminUser) {
+        // Secretarios: todas las hijas de sus secretarías
+        const misSecretariasIds = secretariasVisibles.map(s => s.id);
+        const hijas = (misSecretariasIds.length > 0)
+          ? await Dependencia.findAll({
+              where: { dependencia_padre_id: { [Op.in]: misSecretariasIds } },
+              attributes: ['id']
+            })
+          : [];
+        // Jefes: sus áreas
+        const misAreasJefe = await Dependencia.findAll({
+          where: { jefe_usuario_id: userId, dependencia_padre_id: { [Op.ne]: null } },
+          attributes: ['id']
+        });
+
+        const idsSecretario = new Set(hijas.map(h => h.id));
+        const idsJefe = new Set(misAreasJefe.map(a => a.id));
+        const union = new Set([...idsSecretario, ...idsJefe]);
+
+        if (union.size === 0) {
+          return res.json({
+            totals: {},
+            byArea: [],
+            items: [],
+            secretarias: secretariasVisibles,
+            areas: [],
+            pagination: { page: 1, pages: 1, count: 0, limit: pageSize }
+          });
+        }
+        whereBase.dependencia_id = { [Op.in]: Array.from(union) };
+      } // ADMIN no limita aquí (ve todo)
+    }
+
+    // Si hay secretariaId pero NO hay areaId:
+    // - Si ya calculamos areaIdsAutorizados arriba (hijas visibles según rol)
+    if (secretariaId && !areaId) {
+      whereBase.dependencia_id = { [Op.in]: areaIdsAutorizados.length ? areaIdsAutorizados : [-1] }; // -1 para vaciar
+    }
+
+    // Si hay areaId → filtrar a esa área concreta, pero verificamos acceso
+    if (areaId && !Number.isNaN(Number(areaId))) {
+      const areaNum = Number(areaId);
+      if (isAdminUser) {
+        whereBase.dependencia_id = areaNum;
+      } else {
+        // No admin: comprobar si esa área está dentro de areasVisibles (cuando hay secretaria) o dentro de su universo (cuando no hay secretaria)
+        let allowed = false;
+        if (secretariaId) {
+          allowed = areasVisibles.some(a => a.id === areaNum);
+        } else {
+          // Sin secretariaId: comprobar si es área propia (jefe) o hija de sus secretarías (secretario)
+          const esJefeDeArea = await Dependencia.count({
+            where: { id: areaNum, jefe_usuario_id: userId, dependencia_padre_id: { [Op.ne]: null } }
+          });
+          if (esJefeDeArea > 0) allowed = true;
+
+          if (!allowed) {
+            // es hija de alguna secretaría donde soy secretario?
+            const misSecretariasIds = secretariasVisibles.map(s => s.id);
+            const countHijaDeMisSec = await Dependencia.count({
+              where: { id: areaNum, dependencia_padre_id: { [Op.in]: misSecretariasIds } }
+            });
+            if (countHijaDeMisSec > 0) allowed = true;
+          }
+        }
+
+        if (!allowed) {
+          // sin acceso → colección vacía
+          whereBase.dependencia_id = -1; // forzamos vacío
+        } else {
+          whereBase.dependencia_id = areaNum;
+        }
+      }
+    }
 
     // Estado(s)
     if (estado) {
@@ -254,21 +424,16 @@ router.get('/board', auth, async (req, res) => {
       if (estados.length) whereBase.estado = { [Op.in]: estados };
     }
 
-    // Filtro por área específica
-    if (areaId && !Number.isNaN(Number(areaId))) {
-      whereBase.dependencia_id = Number(areaId);
-    }
-
-    // 🔎 BÚSQUEDA multi-palabra: nombre completo/usuario/cédula/motivo
+    // 🔎 Búsqueda multi-palabra
     if (q && q.trim()) {
       const tokens = q.trim().split(/\s+/).filter(Boolean);
       const andClauses = tokens.map(t => {
         const like = `%${t}%`;
         return {
           [Op.or]: [
-            { nombre_completo:   { [Op.like]: like } },
-            { motivo:            { [Op.like]: like } },
-            { cedula:            { [Op.like]: like } },
+            { nombre_completo:     { [Op.like]: like } },
+            { motivo:              { [Op.like]: like } },
+            { cedula:              { [Op.like]: like } },
             { '$usuario.nombre$':  { [Op.like]: like } },
             { '$usuario.usuario$': { [Op.like]: like } },
           ]
@@ -277,10 +442,11 @@ router.get('/board', auth, async (req, res) => {
       whereBase[Op.and] = [...(whereBase[Op.and] || []), ...andClauses];
     }
 
-    // Rango de fechas
+    // Rango de fechas (to inclusivo hasta 23:59:59.999)
     if (from || to) {
       const f = from ? new Date(from) : null;
-      const t = to ? new Date(to) : null;
+      let t = to ? new Date(to) : null;
+      if (t) t.setHours(23, 59, 59, 999);
       if (f && t) whereBase.fecha = { [Op.between]: [f, t] };
       else if (f) whereBase.fecha = { [Op.gte]: f };
       else if (t) whereBase.fecha = { [Op.lte]: t };
@@ -294,12 +460,12 @@ router.get('/board', auth, async (req, res) => {
         'dependencia_id',
         [sequelize.fn('COUNT', sequelize.col('Solicitud.id')), 'total']
       ],
-      group: ['estado', 'dependencia_id'],
+      group: ['estado', 'dependencia_id', 'dependencia.id', 'dependencia.nombre'],
       include: [
         { model: Dependencia, as: 'dependencia', attributes: ['id', 'nombre'] },
-        // IMPORTANTE: incluir usuario (aunque sin columnas) para habilitar '$usuario.*$' en where
-        { model: Usuario, as: 'usuario', attributes: [], required: false },
+        { model: Usuario, as: 'usuario', attributes: [], required: false }, // habilita $usuario.*$ en where
       ],
+      raw: false
     });
 
     const totals = { pendiente_jefe: 0, pendiente_secretario: 0, aprobada: 0, rechazada: 0 };
@@ -310,7 +476,7 @@ router.get('/board', auth, async (req, res) => {
       const tot = parseInt(r.get('total'), 10) || 0;
       const areaName = r.get('dependencia')?.nombre || '—';
 
-      if (totals.hasOwnProperty(est)) totals[est] += tot;
+      if (Object.prototype.hasOwnProperty.call(totals, est)) totals[est] += tot;
 
       if (!byAreaMap.has(areaName)) {
         byAreaMap.set(areaName, {
@@ -323,7 +489,7 @@ router.get('/board', auth, async (req, res) => {
         });
       }
       const row = byAreaMap.get(areaName);
-      if (row.hasOwnProperty(est)) row[est] += tot;
+      if (Object.prototype.hasOwnProperty.call(row, est)) row[est] += tot;
       row.total += tot;
     }
     const byArea = Array.from(byAreaMap.values()).sort((a, b) => b.total - a.total);
@@ -345,17 +511,14 @@ router.get('/board', auth, async (req, res) => {
       limit: pageSize
     });
 
-    // Áreas visibles (para combos)
-    const areasVisibles = await Dependencia.findAll({
-      where: { id: { [Op.in]: areaIds } },
-      attributes: ['id', 'nombre'],
-      order: [['nombre', 'ASC']]
-    });
-
+    // --------- Construir respuesta ----------
     res.json({
       totals,
       byArea,
       items: rows,
+      // Secretarías visibles SIEMPRE (para el combo)
+      secretarias: secretariasVisibles,
+      // Áreas visibles SOLO si hay secretariaId (para el combo)
       areas: areasVisibles,
       pagination: {
         page: pageNum,
